@@ -1,61 +1,229 @@
-# GLM Flash Demo
+# DeepSeek API 代理服务
 
-极简的智谱 AI GLM-4.5-Flash API 客户端 - 仅支持同步流式调用
+基于 Rust + Axum 的 DeepSeek API 安全代理网关
+
+## 项目概述
+
+本项目提供了一个安全的 DeepSeek API 代理服务，解决以下问题：
+
+1. **API 密钥隐藏**：客户端使用临时 Token 访问，真实 API Key 只保存在服务器
+2. **请求串行控制**：同一 Token 同时只允许一个请求，避免并发冲突
+3. **登录缓存**：60 秒内多次登录返回同一 Token，减少重复认证
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 配置环境变量
 
-```bash
-uv sync
-```
-
-### 2. 配置 API Key
-
-编辑 `set_api_key.ps1`，将 `YOUR_API_KEY_HERE` 替换为你的实际 API Key，然后运行:
+设置 DeepSeek API Key：
 
 ```powershell
-.\set_api_key.ps1
+# Windows PowerShell
+[System.Environment]::SetEnvironmentVariable('OPENAI_API_KEY', 'your-api-key', 'User')
+
+# 重启终端使环境变量生效
 ```
 
-**重启终端**后环境变量即可生效。
+### 2. 启动代理服务
 
-### 3. 运行示例
+```powershell
+cd deepseek_proxy
+.\start.ps1
+```
 
-```bash
-uv run python main.py
+服务将启动在 `http://0.0.0.0:8080`
+
+### 3. 测试服务
+
+```powershell
+cd deepseek_proxy
+uv run python test_proxy.py
 ```
 
 ## 使用方法
 
-```python
-from glm_client import GLMClient
+### 登录获取 Token
 
-# 自动从环境变量 GLM_FLASH_API_KEY 读取 API Key
-with GLMClient() as client:
-    for text in client.chat(
-        messages=[
-            {"role": "system", "content": "你是一个有用的AI助手。"},
-            {"role": "user", "content": "你好"}
-        ],
-        model="glm-4.5-flash"
-    ):
-        print(text, end="", flush=True)
+```python
+import httpx
+
+# 登录
+response = httpx.post(
+    "http://localhost:8080/auth/login",
+    json={"username": "admin", "password": "admin123"}
+)
+token = response.json()["token"]
 ```
 
-## API 参数
+### 流式对话
 
-- `messages`: 消息列表，格式 `[{"role": "user", "content": "..."}]`
-- `model`: 模型名称，默认 `"glm-4.5-flash"`
-- `temperature`: 温度参数 0.0-1.0，默认 1.0
-- `top_p`: 核采样参数，默认 0.95  
-- `max_tokens`: 最大输出 token 数（可选）
-- 其他参数: `do_sample`, `stop`, `request_id`, `user_id` 等
+```python
+import httpx
+import json
 
-## 特性
+headers = {"Authorization": f"Bearer {token}"}
+data = {
+    "model": "deepseek-chat",
+    "messages": [
+        {"role": "user", "content": "你好"}
+    ],
+    "stream": True
+}
 
-✅ 极简实现 - 只保留同步流式调用  
-✅ 自动从环境变量读取 API Key  
-✅ 基于 httpx 的高性能 HTTP 客户端  
-✅ 完整的类型标注  
-✅ 上下文管理器支持
+with httpx.stream(
+    "POST",
+    "http://localhost:8080/chat/completions",
+    headers=headers,
+    json=data,
+    timeout=60
+) as response:
+    for line in response.iter_lines():
+        if line.startswith("data: "):
+            data_str = line[6:]
+            if data_str.strip() == "[DONE]":
+                break
+            chunk = json.loads(data_str)
+            if "choices" in chunk:
+                content = chunk["choices"][0]["delta"].get("content", "")
+                print(content, end="", flush=True)
+```
+
+## 限流规则
+
+### 1. 登录限流
+
+- 每个用户 **60 秒内**多次登录返回**同一个 Token**
+- Token 缓存在内存中，60 秒后自动失效
+
+### 2. 请求串行
+
+- 同一 Token **同时只允许 1 个请求**正在处理
+- 并发请求会收到 `429 Too Many Requests` 错误
+
+### 3. 不同用户可并发
+
+- 不同 Token 之间**不互相影响**
+- 多用户可以同时请求
+
+## 状态码说明
+
+| 状态码 | 说明 | 处理建议 |
+|--------|------|----------|
+| 200 | 成功 | 正常处理 |
+| 401 | Token 无效/过期 | 重新登录 |
+| 429 | 该 Token 已有请求在处理 | 等待当前请求完成 |
+| 502 | DeepSeek API 错误 | 稍后重试 |
+
+## 配置文件
+
+`deepseek_proxy/config.toml`:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[auth]
+jwt_secret = "your-secret-key-change-in-production"
+token_ttl_seconds = 3600  # Token 有效期（实际缓存60秒）
+
+[[auth.users]]
+username = "admin"
+password = "admin123"
+
+[[auth.users]]
+username = "user1"
+password = "pass123"
+
+[deepseek]
+api_key = ""  # 从环境变量 OPENAI_API_KEY 读取
+base_url = "https://api.deepseek.com/v1"
+timeout_seconds = 60
+```
+
+## 项目结构
+
+```
+deepseek_proxy/
+├── src/
+│   ├── main.rs                 # 服务入口
+│   ├── config.rs               # 配置管理
+│   ├── error.rs                # 错误定义
+│   ├── auth/
+│   │   ├── handler.rs          # 登录接口
+│   │   ├── jwt.rs              # JWT 服务
+│   │   └── middleware.rs       # Token 验证中间件
+│   ├── deepseek/
+│   │   └── client.rs           # DeepSeek API 客户端
+│   └── proxy/
+│       ├── handler.rs          # 代理接口
+│       └── limiter.rs          # 限流器（登录缓存 + Token 串行）
+├── config.toml                 # 配置文件
+├── start.ps1                   # 启动脚本
+├── test_proxy.py               # 测试脚本
+└── test_deepseek.py            # DeepSeek 专用测试
+```
+
+## 测试场景
+
+运行 `test_proxy.py` 会执行以下测试：
+
+1. ✅ **登录认证** - 验证用户名密码登录
+2. ✅ **登录缓存 (60秒)** - 验证多次登录返回同一 Token
+3. ✅ **流式对话** - 验证 SSE 流式响应
+4. ✅ **Token 串行限流** - 验证同一 Token 并发请求被限流
+5. ✅ **多用户并发** - 验证不同 Token 可以并发
+6. ✅ **基础并发测试** - 综合并发场景
+7. ✅ **未授权拦截** - 验证无 Token 访问被拒绝
+
+## 技术栈
+
+- **Rust** - 系统编程语言
+- **Axum** - 高性能 Web 框架
+- **Tokio** - 异步运行时
+- **Reqwest** - HTTP 客户端（支持流式响应）
+- **JWT** - Token 生成与验证
+
+## 开发调试
+
+```powershell
+# 编译
+cd deepseek_proxy
+cargo build
+
+# 运行（开发模式）
+cargo run
+
+# 查看日志（debug 级别）
+$env:RUST_LOG="debug"; cargo run
+```
+
+## 部署建议
+
+```bash
+# 编译 release 版本
+cargo build --release
+
+# 运行
+./target/release/deepseek_proxy
+```
+
+## 常见问题
+
+### Q: 为什么需要代理服务？
+
+A: 
+1. **安全性**：隐藏真实 API Key，避免泄露
+2. **控制性**：统一管理用户权限和访问控制
+3. **稳定性**：请求串行化，避免并发冲突
+
+### Q: Token 有效期是多久？
+
+A: Token 60 秒内有效。60 秒内多次登录会返回同一个 Token。
+
+### Q: 429 错误如何处理？
+
+A: 说明该 Token 已有请求正在处理。等待当前请求完成后再发起新请求。
+
+### Q: 支持多少并发？
+
+A: 每个 Token 同时只能处理 1 个请求。但不同用户（不同 Token）可以并发。
