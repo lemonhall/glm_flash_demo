@@ -1,0 +1,87 @@
+use crate::error::AppError;
+use futures::Stream;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use tokio_util::io::StreamReader;
+
+#[derive(Debug, Clone)]
+pub struct GlmClient {
+    client: Client,
+    api_key: String,
+    base_url: String,
+    timeout: Duration,
+}
+
+impl GlmClient {
+    pub fn new(api_key: String, base_url: String, timeout_seconds: u64) -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(timeout_seconds))
+            .build()
+            .expect("Failed to build HTTP client");
+
+        Self {
+            client,
+            api_key,
+            base_url,
+            timeout: Duration::from_secs(timeout_seconds),
+        }
+    }
+
+    /// 流式请求 GLM API
+    pub async fn chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> Result<impl Stream<Item = Result<bytes::Bytes, reqwest::Error>>, AppError> {
+        let url = format!("{}/chat/completions", self.base_url);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::GlmError(format!("请求 GLM API 失败: {}", e)))?;
+
+        // 检查响应状态
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(AppError::GlmError(format!(
+                "GLM API 返回错误 {}: {}",
+                status, error_text
+            )));
+        }
+
+        Ok(response.bytes_stream())
+    }
+}
+
+// ===== 请求/响应数据结构 =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatRequest {
+    pub model: String,
+    pub messages: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    pub stream: bool,
+    // 支持其他参数透传
+    #[serde(flatten)]
+    pub extra: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    pub role: String,
+    pub content: String,
+}

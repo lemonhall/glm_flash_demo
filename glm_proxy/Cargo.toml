@@ -1,0 +1,45 @@
+[package]
+name = "glm_proxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web 框架
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# HTTP 客户端
+reqwest = { version = "0.12", features = ["stream", "json"] }
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# JWT 认证
+jsonwebtoken = "9"
+
+# 并发控制
+tokio-util = "0.7"
+futures = "0.3"
+
+# 配置管理
+config = "0.14"
+dotenvy = "0.15"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 时间处理
+chrono = "0.4"
+
+# 错误处理
+anyhow = "1.0"
+thiserror = "1.0"
+
+# 并发安全集合
+dashmap = "6"
