@@ -3,6 +3,7 @@ mod config;
 mod error;
 mod deepseek;
 mod proxy;
+mod quota;
 
 use auth::{login, auth_middleware, JwtService};
 use axum::{
@@ -13,6 +14,8 @@ use axum::{
 use config::Config;
 use deepseek::DeepSeekClient;
 use proxy::{proxy_chat, TokenLimiter, LoginLimiter};
+use quota::QuotaManager;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -25,6 +28,7 @@ pub struct AppState {
     pub deepseek_client: Arc<DeepSeekClient>,
     pub token_limiter: Arc<TokenLimiter>,
     pub login_limiter: Arc<LoginLimiter>,
+    pub quota_manager: Arc<QuotaManager>,
 }
 
 #[tokio::main]
@@ -61,6 +65,18 @@ async fn main() -> anyhow::Result<()> {
     let token_limiter = Arc::new(TokenLimiter::new());
     let login_limiter = Arc::new(LoginLimiter::new(config.auth.token_ttl_seconds));
 
+    // 初始化配额管理器
+    let data_dir = PathBuf::from("data/quotas");
+    tokio::fs::create_dir_all(&data_dir).await?;
+    let config_arc = Arc::new(config.clone());
+    let quota_manager = Arc::new(QuotaManager::new(
+        config_arc,
+        data_dir,
+        config.quota.save_interval,
+    ));
+
+    tracing::info!("配额: 每 {} 次请求写一次磁盘", config.quota.save_interval);
+
     let config = Arc::new(config);
 
     // 创建统一的应用状态
@@ -70,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
         deepseek_client,
         token_limiter,
         login_limiter,
+        quota_manager: quota_manager.clone(),
     };
 
     // 构建路由
@@ -99,7 +116,26 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("📝 登录接口: POST http://{}/auth/login", addr);
     tracing::info!("🔄 代理接口: POST http://{}/chat/completions", addr);
     
-    axum::serve(listener, app).await?;
+    // 优雅关闭处理
+    let quota_manager_shutdown = quota_manager.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(quota_manager_shutdown))
+        .await?;
 
     Ok(())
+}
+
+/// 优雅关闭信号处理
+async fn shutdown_signal(quota_manager: Arc<QuotaManager>) {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("无法监听 Ctrl+C 信号");
+    
+    println!("\n📦 正在保存配额数据...");
+    
+    if let Err(e) = quota_manager.save_all().await {
+        eprintln!("❌ 保存失败: {}", e);
+    } else {
+        println!("✅ 数据已保存");
+    }
 }

@@ -10,10 +10,20 @@ token_ttl_seconds = 3600
 [[auth.users]]
 username = "admin"
 password = "admin123"
+quota_tier = "premium"  # 高级版 1500次/月
+is_active = true
 
 [[auth.users]]
 username = "user1"
 password = "pass123"
+quota_tier = "basic"  # 基础版 500次/月
+is_active = true
+
+[[auth.users]]
+username = "user2"
+password = "pass456"
+quota_tier = "pro"  # 专业版 1000次/月
+is_active = true
 
 [deepseek]
 # 从环境变量 OPENAI_API_KEY 读取
@@ -25,3 +35,7 @@ timeout_seconds = 60
 requests_per_second = 2
 queue_capacity = 20
 queue_timeout_seconds = 5
+
+[quota]
+save_interval = 100  # 每100次请求写一次磁盘
+monthly_reset_day = 1  # 每月1号重置

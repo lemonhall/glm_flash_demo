@@ -7,6 +7,8 @@ pub struct Config {
     pub auth: AuthConfig,
     pub deepseek: DeepSeekConfig,
     pub rate_limit: RateLimitConfig,
+    #[serde(default)]
+    pub quota: QuotaConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -26,6 +28,18 @@ pub struct AuthConfig {
 pub struct User {
     pub username: String,
     pub password: String,
+    #[serde(default = "default_quota_tier")]
+    pub quota_tier: String,  // "basic", "pro", "premium"
+    #[serde(default = "default_is_active")]
+    pub is_active: bool,
+}
+
+fn default_quota_tier() -> String {
+    "basic".to_string()
+}
+
+fn default_is_active() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -40,6 +54,31 @@ pub struct RateLimitConfig {
     pub requests_per_second: usize,
     pub queue_capacity: usize,
     pub queue_timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuotaConfig {
+    #[serde(default = "default_save_interval")]
+    pub save_interval: u32,  // 每N次请求写一次磁盘
+    #[serde(default = "default_monthly_reset_day")]
+    pub monthly_reset_day: u32,  // 每月几号重置
+}
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            save_interval: 100,
+            monthly_reset_day: 1,
+        }
+    }
+}
+
+fn default_save_interval() -> u32 {
+    100
+}
+
+fn default_monthly_reset_day() -> u32 {
+    1
 }
 
 impl Config {

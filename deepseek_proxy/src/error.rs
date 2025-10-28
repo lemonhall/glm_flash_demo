@@ -10,6 +10,13 @@ pub enum AppError {
     #[error("认证失败: {0}")]
     Unauthorized(String),
 
+    #[error("配额已耗尽，需要付费")]
+    PaymentRequired {
+        used: u32,
+        limit: u32,
+        reset_at: String,
+    },
+
     #[error("排队超时")]
     QueueTimeout,
 
@@ -23,13 +30,26 @@ pub enum AppError {
     GlmError(String),
 
     #[error("内部错误: {0}")]
-    Internal(String),
+    InternalError(String),
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg),
+            AppError::PaymentRequired { used, limit, reset_at } => {
+                let body = Json(json!({
+                    "error": "quota_exceeded",
+                    "message": "月度配额已耗尽，请升级套餐或等待下月重置",
+                    "details": {
+                        "used": used,
+                        "limit": limit,
+                        "reset_at": reset_at
+                    },
+                    "upgrade_url": "https://your-site.com/upgrade"
+                }));
+                return (StatusCode::PAYMENT_REQUIRED, body).into_response();
+            }
             AppError::QueueTimeout => (
                 StatusCode::REQUEST_TIMEOUT,
                 "queue_timeout",
@@ -46,7 +66,7 @@ impl IntoResponse for AppError {
                 "GLM 服务响应超时,请等待 5-10 秒后重试".to_string(),
             ),
             AppError::GlmError(msg) => (StatusCode::BAD_GATEWAY, "glm_error", msg),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error", msg),
+            AppError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error", msg),
         };
 
         let body = Json(json!({
@@ -63,6 +83,6 @@ impl IntoResponse for AppError {
 // 兼容 anyhow::Error
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
-        AppError::Internal(err.to_string())
+        AppError::InternalError(err.to_string())
     }
 }
