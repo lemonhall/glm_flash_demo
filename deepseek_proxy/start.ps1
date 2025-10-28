@@ -1,4 +1,5 @@
 # 一键启动脚本 - 自动检查环境并运行服务
+Stop-Process -Name "glm_proxy" -Force -ErrorAction SilentlyContinue
 
 # 设置代理 - 加速 Cargo 下载依赖
 $env:HTTP_PROXY = "http://127.0.0.1:7897"

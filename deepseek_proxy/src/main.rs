@@ -1,7 +1,7 @@
 mod auth;
 mod config;
 mod error;
-mod glm;
+mod deepseek;
 mod proxy;
 
 use auth::{login, auth_middleware, JwtService};
@@ -11,7 +11,7 @@ use axum::{
     Router,
 };
 use config::Config;
-use glm::GlmClient;
+use deepseek::DeepSeekClient;
 use proxy::{proxy_chat, RateLimiter};
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
@@ -22,7 +22,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 pub struct AppState {
     pub config: Arc<Config>,
     pub jwt_service: Arc<JwtService>,
-    pub glm_client: Arc<GlmClient>,
+    pub deepseek_client: Arc<DeepSeekClient>,
     pub rate_limiter: Arc<RateLimiter>,
 }
 
@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load()?;
     tracing::info!("配置加载成功");
     tracing::info!("服务器地址: {}:{}", config.server.host, config.server.port);
-    tracing::info!("GLM API: {}", config.glm.base_url);
+    tracing::info!("DeepSeek API: {}", config.deepseek.base_url);
     tracing::info!("限流: {} req/s", config.rate_limit.requests_per_second);
     tracing::info!("队列容量: {}", config.rate_limit.queue_capacity);
 
@@ -51,10 +51,10 @@ async fn main() -> anyhow::Result<()> {
         config.auth.token_ttl_seconds,
     ));
 
-    let glm_client = Arc::new(GlmClient::new(
-        config.glm.api_key.clone(),
-        config.glm.base_url.clone(),
-        config.glm.timeout_seconds,
+    let deepseek_client = Arc::new(DeepSeekClient::new(
+        config.deepseek.api_key.clone(),
+        config.deepseek.base_url.clone(),
+        config.deepseek.timeout_seconds,
     ));
 
     let rate_limiter = Arc::new(RateLimiter::new(
@@ -69,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
     let app_state = AppState {
         config: config.clone(),
         jwt_service,
-        glm_client,
+        deepseek_client,
         rate_limiter,
     };
 
@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     
-    tracing::info!("🚀 GLM 代理服务启动成功: http://{}", addr);
+    tracing::info!("🚀 DeepSeek 代理服务启动成功: http://{}", addr);
     tracing::info!("📝 登录接口: POST http://{}/auth/login", addr);
     tracing::info!("🔄 代理接口: POST http://{}/chat/completions", addr);
     

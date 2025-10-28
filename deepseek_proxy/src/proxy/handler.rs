@@ -1,6 +1,6 @@
 use crate::{
     error::AppError,
-    glm::ChatRequest,
+    deepseek::ChatRequest,
     AppState,
 };
 use axum::{
@@ -11,7 +11,7 @@ use axum::{
     Json,
 };
 
-/// 代理聊天请求到 GLM API
+/// 代理聊天请求到 DeepSeek API
 pub async fn proxy_chat(
     State(state): State<AppState>,
     Json(mut request): Json<ChatRequest>,
@@ -22,10 +22,10 @@ pub async fn proxy_chat(
     // 2. 强制设置为流式
     request.stream = true;
 
-    // 3. 转发到 GLM API
-    let byte_stream = state.glm_client.chat_stream(request).await?;
+    // 3. 转发到 DeepSeek API
+    let byte_stream = state.deepseek_client.chat_stream(request).await?;
 
-    // 4. 直接透传 GLM 的字节流（保持原始 SSE 格式）
+    // 4. 直接透传
     let stream_body = Body::from_stream(byte_stream);
 
     // 5. 构建 SSE 响应头

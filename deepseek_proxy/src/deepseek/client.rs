@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
-pub struct GlmClient {
+pub struct DeepSeekClient {
     client: Client,
     api_key: String,
     base_url: String,
 }
 
-impl GlmClient {
+impl DeepSeekClient {
     pub fn new(api_key: String, base_url: String, timeout_seconds: u64) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_seconds))
@@ -26,7 +26,7 @@ impl GlmClient {
         }
     }
 
-    /// 流式请求 GLM API
+    /// 流式请求 DeepSeek API
     pub async fn chat_stream(
         &self,
         request: ChatRequest,
@@ -41,7 +41,7 @@ impl GlmClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| AppError::GlmError(format!("请求 GLM API 失败: {}", e)))?;
+            .map_err(|e| AppError::GlmError(format!("请求 DeepSeek API 失败: {}", e)))?;
 
         // 检查响应状态
         if !response.status().is_success() {
@@ -51,7 +51,7 @@ impl GlmClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(AppError::GlmError(format!(
-                "GLM API 返回错误 {}: {}",
+                "DeepSeek API 返回错误 {}: {}",
                 status, error_text
             )));
         }

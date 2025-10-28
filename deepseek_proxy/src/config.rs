@@ -5,7 +5,7 @@ use std::env;
 pub struct Config {
     pub server: ServerConfig,
     pub auth: AuthConfig,
-    pub glm: GlmConfig,
+    pub deepseek: DeepSeekConfig,
     pub rate_limit: RateLimitConfig,
 }
 
@@ -29,7 +29,7 @@ pub struct User {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct GlmConfig {
+pub struct DeepSeekConfig {
     pub api_key: String,
     pub base_url: String,
     pub timeout_seconds: u64,
@@ -53,14 +53,14 @@ impl Config {
             .build()?
             .try_deserialize()?;
 
-        // 从环境变量读取 GLM API Key (优先级高于配置文件)
-        if let Ok(api_key) = env::var("GLM_FLASH_API_KEY") {
-            config.glm.api_key = api_key;
+        // 从环境变量读取 OpenAI API Key (优先级高于配置文件)
+        if let Ok(api_key) = env::var("OPENAI_API_KEY") {
+            config.deepseek.api_key = api_key;
         }
 
         // 验证必需配置
-        if config.glm.api_key.is_empty() {
-            anyhow::bail!("GLM_FLASH_API_KEY 未设置! 请在环境变量或 .env 文件中配置");
+        if config.deepseek.api_key.is_empty() {
+            anyhow::bail!("OPENAI_API_KEY 未设置! 请在环境变量或 .env 文件中配置");
         }
 
         Ok(config)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""GLM 代理服务测试脚本"""
+"""DeepSeek 代理服务测试脚本"""
 
+from time import sleep
 import httpx
 import json
 import sys
@@ -17,7 +18,7 @@ PASSWORD = "admin123"
 
 
 class ProxyClient:
-    """GLM 代理客户端"""
+    """DeepSeek 代理客户端"""
     
     def __init__(self, base_url: str = PROXY_URL):
         self.base_url = base_url
@@ -41,7 +42,7 @@ class ProxyClient:
             raise ValueError("请先登录获取 Token")
         
         request_data = {
-            "model": "glm-4.5-flash",
+            "model": "deepseek-chat",
             "messages": messages,
             "stream": True,
             **kwargs
@@ -116,8 +117,8 @@ def test_chat_stream():
             print("✓ 已获取 Token\n")
             
             # 发送消息
-            messages = [{"role": "user", "content": "用一句话介绍智谱AI"}]
-            print("📤 发送消息: 用一句话介绍智谱AI\n")
+            messages = [{"role": "user", "content": "用一句话介绍 DeepSeek"}]
+            print("📤 发送消息: 用一句话介绍 DeepSeek\n")
             print("📥 流式响应:")
             print("-" * 60)
             
@@ -140,6 +141,7 @@ def test_chat_stream():
 def test_rate_limit():
     """测试限流功能"""
     print_section("测试 3: 并发限流")
+    sleep(3)
     
     with ProxyClient() as client:
         try:
@@ -187,7 +189,7 @@ def test_unauthorized():
     try:
         response = httpx.post(
             CHAT_ENDPOINT,
-            json={"model": "glm-4.5-flash", "messages": [{"role": "user", "content": "test"}]},
+            json={"model": "deepseek-chat", "messages": [{"role": "user", "content": "test"}]},
             timeout=5.0
         )
         
@@ -207,7 +209,7 @@ def test_unauthorized():
 def main():
     """主测试流程"""
     print("\n" + "=" * 60)
-    print("  GLM 代理服务自动化测试")
+    print("  DeepSeek 代理服务自动化测试")
     print("=" * 60)
     print(f"\n代理地址: {PROXY_URL}")
     print(f"测试账号: {USERNAME}\n")
