@@ -1,17 +1,14 @@
-use crate::error::AppError;
+use crate::{error::AppError, AppState};
 use axum::{
     extract::{Request, State},
     http::header::AUTHORIZATION,
     middleware::Next,
     response::Response,
 };
-use std::sync::Arc;
-
-use super::jwt::JwtService;
 
 /// Token 验证中间件
 pub async fn auth_middleware(
-    State(jwt_service): State<Arc<JwtService>>,
+    State(state): State<AppState>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, AppError> {
@@ -28,7 +25,8 @@ pub async fn auth_middleware(
         .ok_or_else(|| AppError::Unauthorized("Authorization 格式错误".to_string()))?;
 
     // 验证 token
-    let claims = jwt_service
+    let claims = state
+        .jwt_service
         .validate_token(token)
         .map_err(|e| AppError::Unauthorized(format!("Token 无效: {}", e)))?;
 

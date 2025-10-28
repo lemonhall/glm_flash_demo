@@ -17,6 +17,15 @@ use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+// 统一的应用状态
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub jwt_service: Arc<JwtService>,
+    pub glm_client: Arc<GlmClient>,
+    pub rate_limiter: Arc<RateLimiter>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 初始化日志
@@ -56,23 +65,31 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Arc::new(config);
 
+    // 创建统一的应用状态
+    let app_state = AppState {
+        config: config.clone(),
+        jwt_service,
+        glm_client,
+        rate_limiter,
+    };
+
     // 构建路由
-    let app = Router::new()
-        // 认证接口 (无需 token)
-        .route("/auth/login", post(login))
-        .with_state(config.clone())
-        .with_state(jwt_service.clone())
-        
-        // 代理接口 (需要 token)
+    // 公开路由（无需认证）
+    let public_routes = Router::new()
+        .route("/auth/login", post(login));
+    
+    // 受保护路由（需要 Token）
+    let protected_routes = Router::new()
         .route("/chat/completions", post(proxy_chat))
         .layer(middleware::from_fn_with_state(
-            jwt_service.clone(),
+            app_state.clone(),
             auth_middleware,
-        ))
-        .with_state(glm_client)
-        .with_state(rate_limiter)
-        
-        // 添加日志追踪
+        ));
+    
+    // 合并路由
+    let app = public_routes
+        .merge(protected_routes)
+        .with_state(app_state)
         .layer(TraceLayer::new_for_http());
 
     // 启动服务器

@@ -1,9 +1,6 @@
-use crate::{config::Config, error::AppError};
+use crate::{error::AppError, AppState};
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-
-use super::jwt::JwtService;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
@@ -18,12 +15,12 @@ pub struct LoginResponse {
 }
 
 pub async fn login(
-    State(config): State<Arc<Config>>,
-    State(jwt_service): State<Arc<JwtService>>,
+    State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
     // 验证用户名密码
-    let user = config
+    let user = state
+        .config
         .auth
         .users
         .iter()
@@ -31,12 +28,13 @@ pub async fn login(
         .ok_or_else(|| AppError::Unauthorized("用户名或密码错误".to_string()))?;
 
     // 生成 token
-    let token = jwt_service
+    let token = state
+        .jwt_service
         .generate_token(&user.username)
         .map_err(|e| AppError::Internal(format!("生成 token 失败: {}", e)))?;
 
     Ok(Json(LoginResponse {
         token,
-        expires_in: config.auth.token_ttl_seconds,
+        expires_in: state.config.auth.token_ttl_seconds,
     }))
 }

@@ -1,16 +1,15 @@
 use crate::error::AppError;
+use bytes::Bytes;
 use futures::Stream;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokio_util::io::StreamReader;
 
 #[derive(Debug, Clone)]
 pub struct GlmClient {
     client: Client,
     api_key: String,
     base_url: String,
-    timeout: Duration,
 }
 
 impl GlmClient {
@@ -24,7 +23,6 @@ impl GlmClient {
             client,
             api_key,
             base_url,
-            timeout: Duration::from_secs(timeout_seconds),
         }
     }
 
@@ -32,7 +30,7 @@ impl GlmClient {
     pub async fn chat_stream(
         &self,
         request: ChatRequest,
-    ) -> Result<impl Stream<Item = Result<bytes::Bytes, reqwest::Error>>, AppError> {
+    ) -> Result<impl Stream<Item = Result<Bytes, reqwest::Error>>, AppError> {
         let url = format!("{}/chat/completions", self.base_url);
 
         let response = self

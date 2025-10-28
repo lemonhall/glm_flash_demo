@@ -1,5 +1,12 @@
 # 一键启动脚本 - 自动检查环境并运行服务
 
+# 设置代理 - 加速 Cargo 下载依赖
+$env:HTTP_PROXY = "http://127.0.0.1:7897"
+$env:HTTPS_PROXY = "http://127.0.0.1:7897"
+
+Write-Host "🌐 已配置代理: 127.0.0.1:7897" -ForegroundColor Cyan
+Write-Host ""
+
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "  GLM 代理服务 - 一键启动" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
