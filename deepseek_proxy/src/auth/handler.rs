@@ -27,11 +27,15 @@ pub async fn login(
         .find(|u| u.username == req.username && u.password == req.password)
         .ok_or_else(|| AppError::Unauthorized("用户名或密码错误".to_string()))?;
 
-    // 生成 token
-    let token = state
-        .jwt_service
-        .generate_token(&user.username)
-        .map_err(|e| AppError::Internal(format!("生成 token 失败: {}", e)))?;
+    // 使用登录限流器：1 分钟内返回同一个 token
+    let token = state.login_limiter
+        .get_or_generate(&user.username, || {
+            state
+                .jwt_service
+                .generate_token(&user.username)
+                .expect("Failed to generate token")
+        })
+        .await;
 
     Ok(Json(LoginResponse {
         token,

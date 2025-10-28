@@ -1,92 +1,100 @@
 use crate::error::AppError;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Mutex;
-use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, Semaphore};
 
-/// 真正的队列+限流：每秒从队列取N个请求
+/// Token 限流器 - 每个 token 同时只允许一个请求
 #[derive(Clone)]
-pub struct RateLimiter {
-    queue: Arc<Mutex<VecDeque<tokio::sync::oneshot::Sender<()>>>>,
-    queue_capacity: usize,
-    requests_per_second: usize,
-    queue_timeout: Duration,
+pub struct TokenLimiter {
+    /// 每个 token 的信号量（value=1 表示只允许一个并发）
+    semaphores: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>,
 }
 
-impl RateLimiter {
-    pub fn new(requests_per_second: usize, queue_capacity: usize, queue_timeout_seconds: u64) -> Self {
-        let limiter = Self {
-            queue: Arc::new(Mutex::new(VecDeque::new())),
-            queue_capacity,
-            requests_per_second,
-            queue_timeout: Duration::from_secs(queue_timeout_seconds),
+impl TokenLimiter {
+    pub fn new() -> Self {
+        Self {
+            semaphores: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// 获取指定 token 的许可
+    pub async fn acquire(&self, token: &str) -> Result<TokenPermit, AppError> {
+        // 获取或创建该 token 的信号量
+        let semaphore = {
+            let mut map = self.semaphores.lock().await;
+            map.entry(token.to_string())
+                .or_insert_with(|| Arc::new(Semaphore::new(1)))
+                .clone()
         };
-        
-        // 启动后台任务：每秒从队列取N个请求
-        let queue_clone = limiter.queue.clone();
-        let rate = requests_per_second;
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                interval.tick().await;
-                
-                let mut queue = queue_clone.lock().await;
-                let count = rate.min(queue.len());
-                
-                if count > 0 {
-                    tracing::debug!("每秒定时器触发，从队列取出 {} 个请求（队列剩余 {}）", count, queue.len() - count);
-                }
-                
-                for _ in 0..count {
-                    if let Some(tx) = queue.pop_front() {
-                        let _ = tx.send(()); // 发送许可
-                    }
-                }
-            }
-        });
-        
-        limiter
-    }
 
-    /// 获取处理许可
-    /// 
-    /// 流程：
-    /// 1. 检查队列是否已满，满了返回429
-    /// 2. 加入队列尾部
-    /// 3. 等待后台任务发送许可（每秒取N个）
-    /// 4. 超时5秒返回408
-    pub async fn acquire(&self) -> Result<RateLimitPermit, AppError> {
-        // 1. 检查队列容量
-        {
-            let queue = self.queue.lock().await;
-            if queue.len() >= self.queue_capacity {
-                tracing::warn!("队列已满: 当前 {} 个请求, 容量 {}", queue.len(), self.queue_capacity);
-                return Err(AppError::TooManyRequests);
-            }
-        }
-        
-        // 2. 创建oneshot channel
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        
-        // 3. 加入队列尾部
-        {
-            let mut queue = self.queue.lock().await;
-            queue.push_back(tx);
-            tracing::debug!("请求加入队列，当前队列长度: {}", queue.len());
-        }
-        
-        // 4. 等待许可（超时5秒）
-        tokio::time::timeout(self.queue_timeout, rx)
-            .await
+        // 尝试获取许可（立即失败，不等待）
+        let permit = semaphore
+            .try_acquire_owned()
             .map_err(|_| {
-                tracing::warn!("请求排队超时: 等待超过 {} 秒", self.queue_timeout.as_secs());
-                AppError::QueueTimeout
-            })?
-            .map_err(|_| AppError::Internal("接收许可失败".to_string()))?;
-        
-        Ok(RateLimitPermit {})
+                tracing::warn!("Token {} 已有请求正在处理", &token[..10]);
+                AppError::TooManyRequests
+            })?;
+
+        tracing::debug!("Token {} 获得处理许可", &token[..10]);
+
+        Ok(TokenPermit { _permit: permit })
     }
 }
 
-/// 限流许可证
-pub struct RateLimitPermit {}
+/// Token 许可证
+pub struct TokenPermit {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+/// 登录限流器 - 每个用户每分钟只能登录一次，返回同一个 token
+#[derive(Clone)]
+pub struct LoginLimiter {
+    /// 用户名 -> (token, 过期时间)
+    cache: Arc<Mutex<HashMap<String, (String, Instant)>>>,
+    /// token 有效期
+    ttl: Duration,
+}
+
+impl LoginLimiter {
+    pub fn new(ttl_seconds: u64) -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            ttl: Duration::from_secs(ttl_seconds.min(60)), // 最多 60 秒
+        }
+    }
+
+    /// 获取或生成 token
+    /// 如果 1 分钟内已经登录过，返回缓存的 token
+    pub async fn get_or_generate<F>(&self, username: &str, generate_fn: F) -> String
+    where
+        F: FnOnce() -> String,
+    {
+        let now = Instant::now();
+        let mut cache = self.cache.lock().await;
+
+        // 检查缓存
+        if let Some((token, expires_at)) = cache.get(username) {
+            if now < *expires_at {
+                tracing::debug!("用户 {} 使用缓存 token", username);
+                return token.clone();
+            }
+        }
+
+        // 生成新 token
+        let token = generate_fn();
+        let expires_at = now + self.ttl;
+        cache.insert(username.to_string(), (token.clone(), expires_at));
+
+        tracing::debug!("用户 {} 生成新 token，有效期 {} 秒", username, self.ttl.as_secs());
+
+        token
+    }
+
+    /// 清理过期缓存（可选，定期调用）
+    pub async fn cleanup(&self) {
+        let now = Instant::now();
+        let mut cache = self.cache.lock().await;
+        cache.retain(|_, (_, expires_at)| now < *expires_at);
+    }
+}

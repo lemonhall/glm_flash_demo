@@ -22,16 +22,18 @@ pub async fn auth_middleware(
     // 提取 Bearer token
     let token = auth_header
         .strip_prefix("Bearer ")
-        .ok_or_else(|| AppError::Unauthorized("Authorization 格式错误".to_string()))?;
+        .ok_or_else(|| AppError::Unauthorized("Authorization 格式错误".to_string()))?
+        .to_string(); // 先克隆 token
 
     // 验证 token
     let claims = state
         .jwt_service
-        .validate_token(token)
+        .validate_token(&token)
         .map_err(|e| AppError::Unauthorized(format!("Token 无效: {}", e)))?;
 
-    // 将用户信息存入 request extensions
+    // 将用户信息和 token 存入 request extensions
     request.extensions_mut().insert(claims);
+    request.extensions_mut().insert(token);
 
     Ok(next.run(request).await)
 }

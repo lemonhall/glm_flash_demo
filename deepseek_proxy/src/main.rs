@@ -12,7 +12,7 @@ use axum::{
 };
 use config::Config;
 use deepseek::DeepSeekClient;
-use proxy::{proxy_chat, RateLimiter};
+use proxy::{proxy_chat, TokenLimiter, LoginLimiter};
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -23,7 +23,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub jwt_service: Arc<JwtService>,
     pub deepseek_client: Arc<DeepSeekClient>,
-    pub rate_limiter: Arc<RateLimiter>,
+    pub token_limiter: Arc<TokenLimiter>,
+    pub login_limiter: Arc<LoginLimiter>,
 }
 
 #[tokio::main]
@@ -32,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "glm_proxy=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "deepseek_proxy=debug,tower_http=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -42,8 +43,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("配置加载成功");
     tracing::info!("服务器地址: {}:{}", config.server.host, config.server.port);
     tracing::info!("DeepSeek API: {}", config.deepseek.base_url);
-    tracing::info!("限流: {} req/s", config.rate_limit.requests_per_second);
-    tracing::info!("队列容量: {}", config.rate_limit.queue_capacity);
+    tracing::info!("限流: 每个 token 同时只允许1个请求");
+    tracing::info!("登录: 每个用户每 {} 秒只能登录1次", config.auth.token_ttl_seconds.min(60));
 
     // 初始化组件
     let jwt_service = Arc::new(JwtService::new(
@@ -57,11 +58,8 @@ async fn main() -> anyhow::Result<()> {
         config.deepseek.timeout_seconds,
     ));
 
-    let rate_limiter = Arc::new(RateLimiter::new(
-        config.rate_limit.requests_per_second,
-        config.rate_limit.queue_capacity,
-        config.rate_limit.queue_timeout_seconds,
-    ));
+    let token_limiter = Arc::new(TokenLimiter::new());
+    let login_limiter = Arc::new(LoginLimiter::new(config.auth.token_ttl_seconds));
 
     let config = Arc::new(config);
 
@@ -70,7 +68,8 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         jwt_service,
         deepseek_client,
-        rate_limiter,
+        token_limiter,
+        login_limiter,
     };
 
     // 构建路由
