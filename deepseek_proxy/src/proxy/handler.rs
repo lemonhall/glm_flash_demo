@@ -25,11 +25,11 @@ pub async fn proxy_chat(
     Extension(claims): Extension<Claims>,
     Json(mut request): Json<ChatRequest>,
 ) -> Result<Response, AppError> {
-    // 1. 检查配额
+    // 1. 检查配额（不扣费）
     let quota_status = state.quota_manager
-        .check_and_increment(&claims.sub)
+        .check_quota(&claims.sub)
         .await?;
-    
+
     match quota_status {
         QuotaStatus::Exceeded { used, limit, reset_at } => {
             tracing::warn!("用户 {} 配额已耗尽: {}/{}", claims.sub, used, limit);
@@ -53,11 +53,14 @@ pub async fn proxy_chat(
     // 4. 转发到 DeepSeek API
     let byte_stream = state.deepseek_client.chat_stream(request).await?;
 
-    // 5. 用 PermitGuardedStream 包装流，确保 permit 在整个流的生命周期内被持有
+    // 5. 上游请求成功，现在扣费
+    state.quota_manager.increment_quota(&claims.sub).await?;
+
+    // 6. 用 PermitGuardedStream 包装流，确保 permit 在整个流的生命周期内被持有
     let guarded_stream = crate::proxy::PermitGuardedStream::new(byte_stream, permit);
     let stream_body = Body::from_stream(guarded_stream);
 
-    // 6. 构建 SSE 响应头
+    // 7. 构建 SSE 响应头
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE, 

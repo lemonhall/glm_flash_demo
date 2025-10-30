@@ -77,19 +77,7 @@ async fn main() -> anyhow::Result<()> {
 
     let login_limiter = Arc::new(LoginLimiter::new(config.auth.token_ttl_seconds));
 
-    // 初始化配额管理器
-    let data_dir = PathBuf::from("data/quotas");
-    tokio::fs::create_dir_all(&data_dir).await?;
-    let config_arc = Arc::new(config.clone());
-    let quota_manager = Arc::new(QuotaManager::new(
-        config_arc,
-        data_dir,
-        config.quota.save_interval,
-    ));
-
-    tracing::info!("配额: 每 {} 次请求写一次磁盘", config.quota.save_interval);
-
-    // 初始化用户管理器（基于文件存储）
+    // 初始化用户管理器（基于文件存储）- 必须在配额管理器之前
     let users_dir = PathBuf::from("data/users");
     let user_manager = Arc::new(
         auth::UserManager::new(users_dir, config.auth.users.clone())
@@ -97,6 +85,19 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("用户管理器初始化失败: {}", e))?
     );
     tracing::info!("用户管理器初始化完成，用户数据存储在 data/users/");
+
+    // 初始化配额管理器（需要 user_manager 来查询动态用户）
+    let data_dir = PathBuf::from("data/quotas");
+    tokio::fs::create_dir_all(&data_dir).await?;
+    let config_arc = Arc::new(config.clone());
+    let quota_manager = Arc::new(QuotaManager::new(
+        config_arc,
+        user_manager.clone(),
+        data_dir,
+        config.quota.save_interval,
+    ));
+
+    tracing::info!("配额: 每 {} 次请求写一次磁盘", config.quota.save_interval);
 
     let config = Arc::new(config);
 

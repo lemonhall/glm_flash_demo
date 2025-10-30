@@ -526,6 +526,131 @@ def test_admin_list_users():
         return False
 
 
+def test_new_user_can_use_service():
+    """测试通过Admin API创建的新用户能够使用服务（覆盖Bug #1）"""
+    print_section("测试 10: 新用户可以使用服务")
+
+    admin_api_base = f"{PROXY_URL}/admin"
+    test_username = "test_newuser"
+    test_password = "newpass123"
+
+    try:
+        # 1. 创建新用户
+        print(f"1. 通过Admin API创建新用户 '{test_username}'...")
+        response = httpx.post(
+            f"{admin_api_base}/users",
+            json={
+                "username": test_username,
+                "password": test_password,
+                "quota_tier": "basic"
+            },
+            timeout=5.0
+        )
+
+        # 如果用户已存在，先删除（通过停用）
+        if response.status_code == 409:
+            print(f"  用户已存在，先停用...")
+            httpx.post(
+                f"{admin_api_base}/users/{test_username}/active",
+                json={"is_active": False},
+                timeout=5.0
+            )
+            # 重新创建
+            response = httpx.post(
+                f"{admin_api_base}/users",
+                json={
+                    "username": test_username,
+                    "password": test_password,
+                    "quota_tier": "basic"
+                },
+                timeout=5.0
+            )
+
+        if response.status_code != 201:
+            print(f"✗ 创建用户失败: {response.status_code} - {response.text}")
+            return False
+
+        result = response.json()
+        print(f"✓ 用户创建成功: {result['username']} (quota_tier: {result['quota_tier']})")
+
+        # 2. 新用户登录
+        print(f"\n2. 新用户登录...")
+        login_response = httpx.post(
+            LOGIN_ENDPOINT,
+            json={"username": test_username, "password": test_password},
+            timeout=5.0
+        )
+
+        if login_response.status_code != 200:
+            print(f"✗ 新用户登录失败: {login_response.status_code} - {login_response.text}")
+            return False
+
+        token = login_response.json()["token"]
+        print(f"✓ 新用户登录成功，Token: {token[:20]}...")
+
+        # 3. 使用新用户调用 chat 接口（这是核心测试：验证配额系统能找到动态创建的用户）
+        print(f"\n3. 新用户调用 chat 接口...")
+        with ProxyClient() as client:
+            client.token = token
+            messages = [{"role": "user", "content": "说一个数字"}]
+
+            try:
+                response_text = "".join(client.chat(messages))
+                print(f"✓ 新用户成功调用 chat 接口")
+                print(f"  响应: {response_text[:30]}...")
+            except Exception as e:
+                print(f"✗ 新用户调用 chat 失败: {e}")
+                # 清理：停用用户
+                httpx.post(
+                    f"{admin_api_base}/users/{test_username}/active",
+                    json={"is_active": False},
+                    timeout=5.0
+                )
+                return False
+
+        # 4. 验证配额已被扣除
+        print(f"\n4. 验证配额已被扣除...")
+        user_info_response = httpx.get(
+            f"{admin_api_base}/users/{test_username}",
+            timeout=5.0
+        )
+
+        if user_info_response.status_code == 200:
+            user_info = user_info_response.json()
+            print(f"✓ 用户信息: {user_info}")
+
+        # 5. 清理：停用测试用户
+        print(f"\n5. 清理测试用户...")
+        cleanup_response = httpx.post(
+            f"{admin_api_base}/users/{test_username}/active",
+            json={"is_active": False},
+            timeout=5.0
+        )
+
+        if cleanup_response.status_code == 200:
+            print(f"✓ 测试用户已停用")
+
+        print("\n✓ 所有新用户测试通过! (Bug #1 已修复)")
+        return True
+
+    except Exception as e:
+        print(f"✗ 测试失败: {e}")
+        import traceback
+        traceback.print_exc()
+
+        # 尝试清理
+        try:
+            httpx.post(
+                f"{admin_api_base}/users/{test_username}/active",
+                json={"is_active": False},
+                timeout=5.0
+            )
+        except:
+            pass
+
+        return False
+
+
 def main():
     """主测试流程"""
     print("\n" + "=" * 60)
@@ -553,6 +678,7 @@ def main():
         ("未授权拦截", test_unauthorized),
         ("用户激活状态管理", test_user_active_management),
         ("列出所有用户", test_admin_list_users),
+        ("新用户可以使用服务 (Bug #1)", test_new_user_can_use_service),
     ]
     
     results = []
