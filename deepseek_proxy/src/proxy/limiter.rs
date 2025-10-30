@@ -2,11 +2,42 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
+use futures::Stream;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use bytes::Bytes;
 
 
 /// Token 许可证
 pub struct TokenPermit {
     _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+/// 持有许可证的流包装器
+/// 确保许可证在整个流的生命周期内都被持有
+pub struct PermitGuardedStream<S> {
+    stream: S,
+    _permit: TokenPermit,
+}
+
+impl<S> PermitGuardedStream<S> {
+    pub fn new(stream: S, permit: TokenPermit) -> Self {
+        Self {
+            stream,
+            _permit: permit,
+        }
+    }
+}
+
+impl<S> Stream for PermitGuardedStream<S>
+where
+    S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+{
+    type Item = Result<Bytes, reqwest::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.stream).poll_next(cx)
+    }
 }
 
 /// 统一Token管理器 - 管理Token生命周期和并发控制

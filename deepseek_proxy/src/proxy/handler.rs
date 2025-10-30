@@ -45,7 +45,7 @@ pub async fn proxy_chat(
     }
 
     // 2. 通过用户名获取Token许可（统一的生命周期和并发控制）
-    let _permit = state.login_limiter.acquire_permit_by_username(&claims.sub).await?;
+    let permit = state.login_limiter.acquire_permit_by_username(&claims.sub).await?;
 
     // 3. 强制设置为流式
     request.stream = true;
@@ -53,8 +53,9 @@ pub async fn proxy_chat(
     // 4. 转发到 DeepSeek API
     let byte_stream = state.deepseek_client.chat_stream(request).await?;
 
-    // 5. 直接透传
-    let stream_body = Body::from_stream(byte_stream);
+    // 5. 用 PermitGuardedStream 包装流，确保 permit 在整个流的生命周期内被持有
+    let guarded_stream = crate::proxy::PermitGuardedStream::new(byte_stream, permit);
+    let stream_body = Body::from_stream(guarded_stream);
 
     // 6. 构建 SSE 响应头
     let mut headers = HeaderMap::new();
