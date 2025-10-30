@@ -5,6 +5,7 @@ mod error;
 mod deepseek;
 mod proxy;
 mod quota;
+mod utils;
 
 use auth::{login, auth_middleware, JwtService};
 use axum::{
@@ -34,13 +35,18 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 初始化日志
+    // 初始化日志（使用东八区时间）
+    let timer = tracing_subscriber::fmt::time::OffsetTime::new(
+        time::UtcOffset::from_hms(8, 0, 0).expect("Invalid UTC offset"),
+        time::format_description::well_known::Rfc3339,
+    );
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "deepseek_proxy=debug,tower_http=debug".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_timer(timer))
         .init();
 
     // 加载配置

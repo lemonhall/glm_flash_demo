@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
 /// 配额档次
@@ -48,13 +48,13 @@ pub enum QuotaStatus {
         used: u32,
         limit: u32,
         remaining: u32,
-        reset_at: DateTime<Utc>,
+        reset_at: DateTime<FixedOffset>,  // 支持任意时区（东八区）
     },
     /// 配额已耗尽，需要付费
     Exceeded {
         used: u32,
         limit: u32,
-        reset_at: DateTime<Utc>,
+        reset_at: DateTime<FixedOffset>,  // 支持任意时区（东八区）
     },
 }
 

@@ -33,7 +33,7 @@ dotenvy = "0.15"
 
 # 日志
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 
 # 时间处理
 chrono = { version = "0.4", features = ["serde"] }
@@ -45,3 +45,4 @@ thiserror = "1.0"
 # 并发安全集合
 dashmap = "6"
 toml = "0.9.8"
+time = { version = "0.3.44", features = ["formatting", "macros"] }

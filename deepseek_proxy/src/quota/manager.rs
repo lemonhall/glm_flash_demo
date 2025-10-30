@@ -73,8 +73,7 @@ impl QuotaManager {
                 used_count: 0,
                 last_saved_count: 0,
                 reset_at: Self::next_month_reset()
-                    .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?
-                    .to_rfc3339(),
+                    .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?,
                 last_saved_at: None,
                 dirty: true,
             }
@@ -97,13 +96,12 @@ impl QuotaManager {
             let state = cache
                 .get(username)
                 .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
-            
+
             let reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
-                .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?
-                .with_timezone(&Utc);
-            
-            // 检查是否需要月度重置
-            now > reset_at
+                .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?;
+
+            // 检查是否需要月度重置（比较时转换为 UTC）
+            now > reset_at.with_timezone(&Utc)
         };
         
         if need_reset {
@@ -117,15 +115,13 @@ impl QuotaManager {
             
             // 再次检查重置时间，防止重复重置
             let current_reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
-                .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?
-                .with_timezone(&Utc);
-            
-            if now > current_reset_at {
+                .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?;
+
+            if now > current_reset_at.with_timezone(&Utc) {
                 state.used_count = 0;
                 state.last_saved_count = 0;
                 state.reset_at = Self::next_month_reset()
-                    .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?
-                    .to_rfc3339();
+                    .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?;
                 state.dirty = true;
                 
                 let username_clone = username.to_string();
@@ -143,8 +139,7 @@ impl QuotaManager {
             .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
         
         let reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
-            .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?
-            .with_timezone(&Utc);
+            .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?;
         
         // 检查配额
         if state.used_count >= state.monthly_limit {
@@ -173,7 +168,7 @@ impl QuotaManager {
             );
             
             state.last_saved_count = current_used;
-            state.last_saved_at = Some(now.to_rfc3339());
+            state.last_saved_at = Some(crate::utils::now_beijing_rfc3339());
             state.dirty = false;
             
             drop(cache);  // 释放锁
@@ -253,9 +248,9 @@ impl QuotaManager {
         Ok(())
     }
 
-    /// 计算下个月1号 0点（UTC）
-    fn next_month_reset() -> Result<DateTime<Utc>, String> {
-        let now = Utc::now();
+    /// 计算下个月1号 0点（东八区 UTC+8）
+    fn next_month_reset() -> Result<String, String> {
+        let now = crate::utils::now_beijing();
         let next_month = if now.month() == 12 {
             NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
                 .ok_or_else(|| "下年度1月1日创建失败".to_string())?
@@ -263,13 +258,15 @@ impl QuotaManager {
             NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
                 .ok_or_else(|| "下月1日创建失败".to_string())?
         };
-        
+
         let naive_datetime = next_month.and_hms_opt(0, 0, 0)
             .ok_or_else(|| "时间00:00:00创建失败".to_string())?;
-            
-        Ok(DateTime::from_naive_utc_and_offset(
-            naive_datetime,
-            Utc
-        ))
+
+        // 创建东八区时间
+        let beijing_offset = chrono::FixedOffset::east_opt(8 * 3600)
+            .ok_or_else(|| "时区创建失败".to_string())?;
+        let datetime: DateTime<chrono::FixedOffset> = DateTime::from_naive_utc_and_offset(naive_datetime, beijing_offset);
+
+        Ok(datetime.to_rfc3339())
     }
 }

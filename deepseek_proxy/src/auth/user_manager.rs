@@ -125,7 +125,7 @@ impl UserManager {
 
         // 更新状态和时间戳
         user.is_active = is_active;
-        user.updated_at = Some(chrono::Utc::now().to_rfc3339());
+        user.updated_at = Some(crate::utils::now_beijing_rfc3339());
 
         // 保存到文件（会同时更新内存）
         self.save_user(&user).await?;
@@ -162,7 +162,7 @@ impl UserManager {
             }
         }
 
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = crate::utils::now_beijing_rfc3339();
         let user = User {
             username: username.clone(),
             password,
