@@ -48,6 +48,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("DeepSeek API: {}", config.deepseek.base_url);
     tracing::info!("限流: 每个 token 同时只允许1个请求");
     tracing::info!("登录: 每个用户每 {} 秒只能登录1次", config.auth.token_ttl_seconds.min(60));
+    tracing::info!("HTTP客户端: 连接池={}个, 保活={}秒, 连接超时={}秒", 
+        config.deepseek.http_client.pool_max_idle_per_host,
+        config.deepseek.http_client.pool_idle_timeout_seconds,
+        config.deepseek.http_client.connect_timeout_seconds
+    );
 
     // 初始化组件
     let jwt_service = Arc::new(JwtService::new(
@@ -59,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
         config.deepseek.api_key.clone(),
         config.deepseek.base_url.clone(),
         config.deepseek.timeout_seconds,
+        &config.deepseek.http_client,
     ).map_err(|e| anyhow::anyhow!("DeepSeek客户端初始化失败: {}", e))?);
 
     let login_limiter = Arc::new(LoginLimiter::new(config.auth.token_ttl_seconds));

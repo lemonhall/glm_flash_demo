@@ -1,4 +1,4 @@
-use crate::error::AppError;
+use crate::{error::AppError, config::HttpClientConfig};
 use bytes::Bytes;
 use futures::Stream;
 use reqwest::Client;
@@ -13,10 +13,28 @@ pub struct DeepSeekClient {
 }
 
 impl DeepSeekClient {
-    pub fn new(api_key: String, base_url: String, timeout_seconds: u64) -> Result<Self, Box<dyn std::error::Error>> {
-        let client = Client::builder()
+    pub fn new(api_key: String, base_url: String, timeout_seconds: u64, http_config: &HttpClientConfig) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut builder = Client::builder()
+            // 请求超时
             .timeout(Duration::from_secs(timeout_seconds))
-            .build()
+            // 连接超时 (建立TCP连接的时间)
+            .connect_timeout(Duration::from_secs(http_config.connect_timeout_seconds))
+            // 连接池配置 - 每个主机最大连接数
+            .pool_max_idle_per_host(http_config.pool_max_idle_per_host)
+            // keep-alive 超时
+            .pool_idle_timeout(Duration::from_secs(http_config.pool_idle_timeout_seconds));
+            
+        // TCP层面的优化 - 禁用Nagle算法，减少延迟
+        if http_config.tcp_nodelay {
+            builder = builder.tcp_nodelay(true);
+        }
+        
+        // 启用HTTP/2支持 (如果服务端支持会自动协商)
+        if http_config.http2_adaptive_window {
+            builder = builder.http2_adaptive_window(true);
+        }
+        
+        let client = builder.build()
             .map_err(|e| format!("HTTP客户端创建失败: {}", e))?;
 
         Ok(Self {

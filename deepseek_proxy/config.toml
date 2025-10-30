@@ -31,6 +31,19 @@ api_key = ""
 base_url = "https://api.deepseek.com/v1"
 timeout_seconds = 60
 
+# HTTP客户端性能配置
+[deepseek.http_client]
+# 连接池配置
+pool_max_idle_per_host = 20      # 每个主机最大空闲连接数
+pool_idle_timeout_seconds = 90   # 连接保活时间(秒)
+
+# 超时配置  
+connect_timeout_seconds = 10     # TCP连接建立超时
+
+# TCP优化
+tcp_nodelay = true              # 禁用Nagle算法，降低延迟
+http2_adaptive_window = true    # HTTP/2自适应窗口
+
 [rate_limit]
 requests_per_second = 2
 queue_capacity = 20

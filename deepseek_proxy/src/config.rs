@@ -47,7 +47,41 @@ pub struct DeepSeekConfig {
     pub api_key: String,
     pub base_url: String,
     pub timeout_seconds: u64,
+    #[serde(default)]
+    pub http_client: HttpClientConfig,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HttpClientConfig {
+    #[serde(default = "default_pool_max_idle_per_host")]
+    pub pool_max_idle_per_host: usize,
+    #[serde(default = "default_pool_idle_timeout_seconds")]
+    pub pool_idle_timeout_seconds: u64,
+    #[serde(default = "default_connect_timeout_seconds")]
+    pub connect_timeout_seconds: u64,
+    #[serde(default = "default_tcp_nodelay")]
+    pub tcp_nodelay: bool,
+    #[serde(default = "default_http2_adaptive_window")]
+    pub http2_adaptive_window: bool,
+}
+
+impl Default for HttpClientConfig {
+    fn default() -> Self {
+        Self {
+            pool_max_idle_per_host: 20,
+            pool_idle_timeout_seconds: 90,
+            connect_timeout_seconds: 10,
+            tcp_nodelay: true,
+            http2_adaptive_window: true,
+        }
+    }
+}
+
+fn default_pool_max_idle_per_host() -> usize { 20 }
+fn default_pool_idle_timeout_seconds() -> u64 { 90 }
+fn default_connect_timeout_seconds() -> u64 { 10 }
+fn default_tcp_nodelay() -> bool { true }
+fn default_http2_adaptive_window() -> bool { true }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RateLimitConfig {
