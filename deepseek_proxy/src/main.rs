@@ -1,3 +1,4 @@
+mod admin;
 mod auth;
 mod config;
 mod error;
@@ -28,6 +29,7 @@ pub struct AppState {
     pub deepseek_client: Arc<DeepSeekClient>,
     pub login_limiter: Arc<LoginLimiter>, // 现在统一管理Token生命周期和并发控制
     pub quota_manager: Arc<QuotaManager>,
+    pub user_manager: Arc<auth::UserManager>, // 用户管理器（内存+持久化）
 }
 
 #[tokio::main]
@@ -81,6 +83,14 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("配额: 每 {} 次请求写一次磁盘", config.quota.save_interval);
 
+    // 初始化用户管理器
+    let config_path = PathBuf::from("config.toml");
+    let user_manager = Arc::new(auth::UserManager::new(
+        config.auth.users.clone(),
+        config_path,
+    ));
+    tracing::info!("用户管理器初始化完成，支持动态管理用户状态");
+
     let config = Arc::new(config);
 
     // 创建统一的应用状态
@@ -90,13 +100,14 @@ async fn main() -> anyhow::Result<()> {
         deepseek_client,
         login_limiter, // 统一管理Token生命周期和并发控制
         quota_manager: quota_manager.clone(),
+        user_manager,
     };
 
     // 构建路由
     // 公开路由（无需认证）
     let public_routes = Router::new()
         .route("/auth/login", post(login));
-    
+
     // 受保护路由（需要 Token）
     let protected_routes = Router::new()
         .route("/chat/completions", post(proxy_chat))
@@ -104,24 +115,37 @@ async fn main() -> anyhow::Result<()> {
             app_state.clone(),
             auth_middleware,
         ));
-    
+
+    // 管理路由（只允许 localhost 访问）
+    let admin_routes = Router::new()
+        .route("/admin/users/:username/active", post(admin::set_user_active))
+        .route("/admin/users/:username", axum::routing::get(admin::get_user))
+        .route("/admin/users", axum::routing::get(admin::list_users))
+        .layer(middleware::from_fn(admin::localhost_only))
+        .with_state(app_state.clone());
+
     // 合并路由
     let app = public_routes
         .merge(protected_routes)
+        .merge(admin_routes)
         .with_state(app_state)
         .layer(TraceLayer::new_for_http());
 
     // 启动服务器
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    
+
     tracing::info!("🚀 DeepSeek 代理服务启动成功: http://{}", addr);
     tracing::info!("📝 登录接口: POST http://{}/auth/login", addr);
     tracing::info!("🔄 代理接口: POST http://{}/chat/completions", addr);
-    
+    tracing::info!("🔧 管理接口: POST http://{}/admin/users/{{username}}/active (仅localhost)", addr);
+
     // 优雅关闭处理
     let quota_manager_shutdown = quota_manager.clone();
-    axum::serve(listener, app)
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>()
+    )
         .with_graceful_shutdown(shutdown_signal(quota_manager_shutdown))
         .await?;
 

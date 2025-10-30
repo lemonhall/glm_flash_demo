@@ -10,6 +10,9 @@ pub enum AppError {
     #[error("认证失败: {0}")]
     Unauthorized(String),
 
+    #[error("资源不存在: {0}")]
+    NotFound(String),
+
     #[error("配额已耗尽，需要付费")]
     PaymentRequired {
         used: u32,
@@ -37,6 +40,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg),
             AppError::PaymentRequired { used, limit, reset_at } => {
                 let body = Json(json!({
                     "error": "quota_exceeded",

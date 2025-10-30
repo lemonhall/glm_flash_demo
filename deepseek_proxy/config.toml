@@ -1,60 +1,51 @@
-[server]
-host = "0.0.0.0"
-port = 8877
-
 [auth]
 jwt_secret = "your-secret-key-change-in-production"
 token_ttl_seconds = 60
 
-# 硬编码用户列表 (生产环境应使用数据库)
 [[auth.users]]
-username = "admin"
+is_active = true
 password = "admin123"
-quota_tier = "premium"  # 高级版 1500次/月
-is_active = true
+quota_tier = "premium"
+username = "admin"
 
 [[auth.users]]
-username = "user1"
+is_active = true
 password = "pass123"
-quota_tier = "basic"  # 基础版 500次/月
-is_active = true
+quota_tier = "basic"
+username = "user1"
 
 [[auth.users]]
-username = "user2"
-password = "pass456"
-quota_tier = "pro"  # 专业版 1000次/月
 is_active = true
+password = "pass456"
+quota_tier = "pro"
+username = "user2"
 
 [deepseek]
-# 从环境变量 OPENAI_API_KEY 读取
 api_key = ""
 base_url = "https://api.deepseek.com/v1"
 timeout_seconds = 60
 
-# HTTP客户端性能配置
 [deepseek.http_client]
-# 连接池配置
-pool_max_idle_per_host = 20      # 每个主机最大空闲连接数
-pool_idle_timeout_seconds = 90   # 连接保活时间(秒)
-
-# 超时配置  
-connect_timeout_seconds = 10     # TCP连接建立超时
-
-# TCP优化
-tcp_nodelay = true              # 禁用Nagle算法，降低延迟
-http2_adaptive_window = true    # HTTP/2自适应窗口
-
-[rate_limit]
-requests_per_second = 2
-queue_capacity = 20
-queue_timeout_seconds = 5
+connect_timeout_seconds = 10
+http2_adaptive_window = true
+pool_idle_timeout_seconds = 90
+pool_max_idle_per_host = 20
+tcp_nodelay = true
 
 [quota]
-save_interval = 5  # 每100次请求写一次磁盘
-monthly_reset_day = 1  # 每月1号重置
+monthly_reset_day = 1
+save_interval = 5
 
-# 配额档次限制配置
 [quota.tiers]
-basic = 500      # 基础版：500次/月
-pro = 1000       # 专业版：1000次/月  
-premium = 1500   # 高级版：1500次/月
+basic = 500
+premium = 1500
+pro = 1000
+
+[rate_limit]
+queue_capacity = 20
+queue_timeout_seconds = 5
+requests_per_second = 2
+
+[server]
+host = "0.0.0.0"
+port = 8877

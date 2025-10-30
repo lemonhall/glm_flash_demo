@@ -44,3 +44,4 @@ thiserror = "1.0"
 
 # 并发安全集合
 dashmap = "6"
+toml = "0.9.8"

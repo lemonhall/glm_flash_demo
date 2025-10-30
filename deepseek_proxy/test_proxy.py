@@ -362,14 +362,14 @@ def test_rate_limit():
 def test_unauthorized():
     """测试未授权访问"""
     print_section("测试 7: 未授权访问拦截")
-    
+
     try:
         response = httpx.post(
             CHAT_ENDPOINT,
             json={"model": "deepseek-chat", "messages": [{"role": "user", "content": "test"}]},
             timeout=5.0
         )
-        
+
         if response.status_code == 401:
             print("✓ 正确拦截未授权请求")
             print(f"  状态码: {response.status_code}")
@@ -377,7 +377,150 @@ def test_unauthorized():
         else:
             print(f"✗ 应该返回 401，实际返回: {response.status_code}")
             return False
-            
+
+    except Exception as e:
+        print(f"✗ 测试失败: {e}")
+        return False
+
+
+def test_user_active_management():
+    """测试用户激活状态管理"""
+    print_section("测试 8: 用户激活状态管理")
+
+    admin_api_base = f"{PROXY_URL}/admin"
+    test_username = "user2"
+    test_password = "pass456"
+
+    try:
+        # 1. 先确保用户是激活状态
+        print("1. 设置用户为激活状态...")
+        response = httpx.post(
+            f"{admin_api_base}/users/{test_username}/active",
+            json={"is_active": True},
+            timeout=5.0
+        )
+        if response.status_code != 200:
+            print(f"✗ 设置激活状态失败: {response.status_code}")
+            return False
+        print(f"✓ 用户 {test_username} 已激活")
+
+        # 2. 测试激活用户可以登录
+        print(f"\n2. 测试激活用户登录...")
+        response = httpx.post(
+            LOGIN_ENDPOINT,
+            json={"username": test_username, "password": test_password},
+            timeout=5.0
+        )
+        if response.status_code == 200:
+            print(f"✓ 激活用户登录成功")
+        else:
+            print(f"✗ 激活用户登录失败: {response.status_code}")
+            return False
+
+        # 3. 停用用户
+        print(f"\n3. 停用用户 {test_username}...")
+        response = httpx.post(
+            f"{admin_api_base}/users/{test_username}/active",
+            json={"is_active": False},
+            timeout=5.0
+        )
+        if response.status_code != 200:
+            print(f"✗ 停用用户失败: {response.status_code}")
+            return False
+        result = response.json()
+        print(f"✓ {result['message']}")
+
+        # 4. 测试停用用户无法登录
+        print(f"\n4. 测试停用用户登录...")
+        response = httpx.post(
+            LOGIN_ENDPOINT,
+            json={"username": test_username, "password": test_password},
+            timeout=5.0
+        )
+        if response.status_code == 401:
+            error_msg = response.json()
+            print(f"✓ 停用用户被正确拒绝")
+            print(f"  错误信息: {error_msg}")
+        else:
+            print(f"✗ 停用用户不应该能登录，状态码: {response.status_code}")
+            return False
+
+        # 5. 重新激活用户
+        print(f"\n5. 重新激活用户 {test_username}...")
+        response = httpx.post(
+            f"{admin_api_base}/users/{test_username}/active",
+            json={"is_active": True},
+            timeout=5.0
+        )
+        if response.status_code != 200:
+            print(f"✗ 重新激活失败: {response.status_code}")
+            return False
+        result = response.json()
+        print(f"✓ {result['message']}")
+
+        # 6. 验证重新激活后可以登录
+        print(f"\n6. 验证重新激活后可以登录...")
+        response = httpx.post(
+            LOGIN_ENDPOINT,
+            json={"username": test_username, "password": test_password},
+            timeout=5.0
+        )
+        if response.status_code == 200:
+            print(f"✓ 重新激活后登录成功")
+        else:
+            print(f"✗ 重新激活后登录失败: {response.status_code}")
+            return False
+
+        # 7. 测试管理API只能从localhost访问（这个测试会失败，因为我们就是localhost）
+        print(f"\n7. 获取用户信息...")
+        response = httpx.get(
+            f"{admin_api_base}/users/{test_username}",
+            timeout=5.0
+        )
+        if response.status_code == 200:
+            user_info = response.json()
+            print(f"✓ 获取用户信息成功:")
+            print(f"  用户名: {user_info['username']}")
+            print(f"  配额档次: {user_info['quota_tier']}")
+            print(f"  激活状态: {user_info['is_active']}")
+        else:
+            print(f"✗ 获取用户信息失败: {response.status_code}")
+            return False
+
+        print("\n✓ 所有用户激活状态管理测试通过!")
+        return True
+
+    except Exception as e:
+        print(f"✗ 测试失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_admin_list_users():
+    """测试列出所有用户"""
+    print_section("测试 9: 列出所有用户")
+
+    admin_api_base = f"{PROXY_URL}/admin"
+
+    try:
+        response = httpx.get(
+            f"{admin_api_base}/users",
+            timeout=5.0
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            users = result['users']
+            print(f"✓ 成功获取用户列表 (共 {len(users)} 个用户):\n")
+            for user in users:
+                status = "✓ 激活" if user['is_active'] else "✗ 停用"
+                print(f"  - {user['username']:10s} [{user['quota_tier']:8s}] {status}")
+            return True
+        else:
+            print(f"✗ 获取用户列表失败: {response.status_code}")
+            return False
+
     except Exception as e:
         print(f"✗ 测试失败: {e}")
         return False
@@ -408,6 +551,8 @@ def main():
         ("多用户并发", test_multi_user_concurrent),
         ("基础并发测试", test_rate_limit),
         ("未授权拦截", test_unauthorized),
+        ("用户激活状态管理", test_user_active_management),
+        ("列出所有用户", test_admin_list_users),
     ]
     
     results = []

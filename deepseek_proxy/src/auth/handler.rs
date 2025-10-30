@@ -18,14 +18,18 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    // 验证用户名密码
+    // 验证用户名密码（从内存中的用户管理器获取）
     let user = state
-        .config
-        .auth
-        .users
-        .iter()
-        .find(|u| u.username == req.username && u.password == req.password)
+        .user_manager
+        .find_user(&req.username, &req.password)
+        .await
         .ok_or_else(|| AppError::Unauthorized("用户名或密码错误".to_string()))?;
+
+    // 检查账户是否已激活
+    if !user.is_active {
+        tracing::warn!("用户 {} 尝试登录，但账户已被停用", user.username);
+        return Err(AppError::Unauthorized("账户已被停用".to_string()));
+    }
 
     // 使用登录限流器：1 分钟内返回同一个 token
     let token = state.login_limiter
