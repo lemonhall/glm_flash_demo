@@ -547,31 +547,22 @@ def test_new_user_can_use_service():
             timeout=5.0
         )
 
-        # 如果用户已存在，先删除（通过停用）
-        if response.status_code == 409:
-            print(f"  用户已存在，先停用...")
+        # 如果用户已存在，先确保是激活状态
+        if response.status_code == 200:
+            result = response.json()
+            print(f"  用户已存在，确保激活状态...")
             httpx.post(
                 f"{admin_api_base}/users/{test_username}/active",
-                json={"is_active": False},
+                json={"is_active": True},
                 timeout=5.0
             )
-            # 重新创建
-            response = httpx.post(
-                f"{admin_api_base}/users",
-                json={
-                    "username": test_username,
-                    "password": test_password,
-                    "quota_tier": "basic"
-                },
-                timeout=5.0
-            )
-
-        if response.status_code != 201:
+            print(f"✓ 使用已存在的用户: {result['username']}")
+        elif response.status_code == 201:
+            result = response.json()
+            print(f"✓ 用户创建成功: {result['username']} (quota_tier: {result['quota_tier']})")
+        else:
             print(f"✗ 创建用户失败: {response.status_code} - {response.text}")
             return False
-
-        result = response.json()
-        print(f"✓ 用户创建成功: {result['username']} (quota_tier: {result['quota_tier']})")
 
         # 2. 新用户登录
         print(f"\n2. 新用户登录...")

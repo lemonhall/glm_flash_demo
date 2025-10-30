@@ -2,7 +2,7 @@
   "username": "user1",
   "tier": "basic",
   "monthly_limit": 500,
-  "used_count": 20,
+  "used_count": 22,
   "last_saved_count": 19,
   "reset_at": "2025-11-01T00:00:00+00:00",
   "last_saved_at": "2025-10-30T23:46:40.504943100+08:00"
