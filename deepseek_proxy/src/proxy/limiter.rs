@@ -66,9 +66,9 @@ impl LoginLimiter {
 
     /// 获取或生成 token
     /// 如果 1 分钟内已经登录过，返回缓存的 token
-    pub async fn get_or_generate<F>(&self, username: &str, generate_fn: F) -> String
+    pub async fn get_or_generate<F, E>(&self, username: &str, generate_fn: F) -> Result<String, E>
     where
-        F: FnOnce() -> String,
+        F: FnOnce() -> Result<String, E>,
     {
         let now = Instant::now();
         let mut cache = self.cache.lock().await;
@@ -77,18 +77,18 @@ impl LoginLimiter {
         if let Some((token, expires_at)) = cache.get(username) {
             if now < *expires_at {
                 tracing::debug!("用户 {} 使用缓存 token", username);
-                return token.clone();
+                return Ok(token.clone());
             }
         }
 
         // 生成新 token
-        let token = generate_fn();
+        let token = generate_fn()?;
         let expires_at = now + self.ttl;
         cache.insert(username.to_string(), (token.clone(), expires_at));
 
         tracing::debug!("用户 {} 生成新 token，有效期 {} 秒", username, self.ttl.as_secs());
 
-        token
+        Ok(token)
     }
 
     /// 清理过期缓存（可选，定期调用）

@@ -90,7 +90,7 @@ impl QuotaManager {
         let now = Utc::now();
         
         // 处理月度重置
-        {
+        let need_reset = {
             let cache = self.cache.lock().await;
             let state = cache
                 .get(username)
@@ -100,21 +100,35 @@ impl QuotaManager {
                 .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?
                 .with_timezone(&Utc);
             
-            // 检查月度重置
-            if now > reset_at {
-                drop(cache);  // 释放锁
-                tracing::info!("用户 {} 配额月度重置", username);
-                
-                let mut cache = self.cache.lock().await;
-                let state = cache.get_mut(username).unwrap();
+            // 检查是否需要月度重置
+            now > reset_at
+        };
+        
+        if need_reset {
+            tracing::info!("用户 {} 配额月度重置", username);
+            
+            // 在锁内完成重置，避免竞态条件
+            let mut cache = self.cache.lock().await;
+            let state = cache
+                .get_mut(username)
+                .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
+            
+            // 再次检查重置时间，防止重复重置
+            let current_reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
+                .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?
+                .with_timezone(&Utc);
+            
+            if now > current_reset_at {
                 state.used_count = 0;
                 state.last_saved_count = 0;
                 state.reset_at = Self::next_month_reset().to_rfc3339();
                 state.dirty = true;
-                drop(cache);
                 
-                // ⚠️ 重置时立即保存！
-                self.save_one_immediately(username).await?;
+                let username_clone = username.to_string();
+                drop(cache);  // 在异步操作前释放锁
+                
+                // 重置时立即保存
+                self.save_one_immediately(&username_clone).await?;
             }
         }
         
@@ -125,7 +139,7 @@ impl QuotaManager {
             .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
         
         let reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
-            .unwrap()
+            .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?
             .with_timezone(&Utc);
         
         // 检查配额
@@ -234,10 +248,15 @@ impl QuotaManager {
     fn next_month_reset() -> DateTime<Utc> {
         let now = Utc::now();
         let next_month = if now.month() == 12 {
-            NaiveDate::from_ymd_opt(now.year() + 1, 1, 1).unwrap()
+            NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
+                .expect("有效的日期参数") // 已知安全的日期
         } else {
-            NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1).unwrap()
+            NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
+                .expect("有效的日期参数") // 已知安全的日期
         };
-        DateTime::from_naive_utc_and_offset(next_month.and_hms_opt(0, 0, 0).unwrap(), Utc)
+        DateTime::from_naive_utc_and_offset(
+            next_month.and_hms_opt(0, 0, 0).expect("有效的时间参数"), // 00:00:00 是有效时间
+            Utc
+        )
     }
 }

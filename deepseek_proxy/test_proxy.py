@@ -8,7 +8,7 @@ import sys
 from typing import Iterator
 
 # 代理服务配置
-PROXY_URL = "http://localhost:8080"
+PROXY_URL = "http://localhost:8877"
 LOGIN_ENDPOINT = f"{PROXY_URL}/auth/login"
 CHAT_ENDPOINT = f"{PROXY_URL}/chat/completions"
 

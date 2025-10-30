@@ -53,9 +53,9 @@ pub async fn proxy_chat(
 
     // 6. 构建 SSE 响应头
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "text/event-stream".parse().unwrap());
-    headers.insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
-    headers.insert(header::CONNECTION, "keep-alive".parse().unwrap());
+    headers.insert(header::CONTENT_TYPE, "text/event-stream".parse().expect("有效的HTTP头值"));
+    headers.insert(header::CACHE_CONTROL, "no-cache".parse().expect("有效的HTTP头值"));
+    headers.insert(header::CONNECTION, "keep-alive".parse().expect("有效的HTTP头值"));
 
     Ok((StatusCode::OK, headers, stream_body).into_response())
 }

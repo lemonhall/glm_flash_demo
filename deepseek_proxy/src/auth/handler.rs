@@ -33,9 +33,9 @@ pub async fn login(
             state
                 .jwt_service
                 .generate_token(&user.username)
-                .expect("Failed to generate token")
+                .map_err(|e| AppError::InternalError(format!("Token生成失败: {}", e)))
         })
-        .await;
+        .await?;
 
     Ok(Json(LoginResponse {
         token,
