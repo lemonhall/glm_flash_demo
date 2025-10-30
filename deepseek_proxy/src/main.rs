@@ -53,13 +53,13 @@ async fn main() -> anyhow::Result<()> {
     let jwt_service = Arc::new(JwtService::new(
         config.auth.jwt_secret.clone(),
         config.auth.token_ttl_seconds,
-    ));
+    ).map_err(|e| anyhow::anyhow!("JWT服务初始化失败: {}", e))?);
 
     let deepseek_client = Arc::new(DeepSeekClient::new(
         config.deepseek.api_key.clone(),
         config.deepseek.base_url.clone(),
         config.deepseek.timeout_seconds,
-    ));
+    ).map_err(|e| anyhow::anyhow!("DeepSeek客户端初始化失败: {}", e))?);
 
     let login_limiter = Arc::new(LoginLimiter::new(config.auth.token_ttl_seconds));
 
@@ -124,9 +124,10 @@ async fn main() -> anyhow::Result<()> {
 
 /// 优雅关闭信号处理
 async fn shutdown_signal(quota_manager: Arc<QuotaManager>) {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("无法监听 Ctrl+C 信号");
+    if let Err(e) = tokio::signal::ctrl_c().await {
+        eprintln!("无法监听 Ctrl+C 信号: {}", e);
+        return;
+    }
     
     println!("\n📦 正在保存配额数据...");
     

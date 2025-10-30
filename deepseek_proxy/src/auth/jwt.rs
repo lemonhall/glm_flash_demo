@@ -14,23 +14,33 @@ pub struct JwtService {
 }
 
 impl JwtService {
-    pub fn new(secret: String, ttl_seconds: u64) -> Self {
-        Self {
-            secret,
-            ttl_seconds: ttl_seconds as i64,
+    pub fn new(secret: String, ttl_seconds: u64) -> Result<Self, String> {
+        let ttl_i64 = i64::try_from(ttl_seconds)
+            .map_err(|_| "TTL时间溢出：超过i64最大值".to_string())?;
+        
+        if ttl_i64 <= 0 {
+            return Err("TTL时间必须大于0".to_string());
         }
+        
+        Ok(Self {
+            secret,
+            ttl_seconds: ttl_i64,
+        })
     }
 
     /// 生成 JWT token
     pub fn generate_token(&self, username: &str) -> anyhow::Result<String> {
         let expiration = Utc::now()
             .checked_add_signed(Duration::seconds(self.ttl_seconds))
-            .expect("valid timestamp")
-            .timestamp() as usize;
+            .ok_or_else(|| anyhow::anyhow!("时间计算溢出"))?
+            .timestamp();
+        
+        let exp_usize = usize::try_from(expiration)
+            .map_err(|_| anyhow::anyhow!("过期时间转换失败"))?;
 
         let claims = Claims {
             sub: username.to_string(),
-            exp: expiration,
+            exp: exp_usize,
         };
 
         let token = encode(

@@ -13,17 +13,17 @@ pub struct DeepSeekClient {
 }
 
 impl DeepSeekClient {
-    pub fn new(api_key: String, base_url: String, timeout_seconds: u64) -> Self {
+    pub fn new(api_key: String, base_url: String, timeout_seconds: u64) -> Result<Self, Box<dyn std::error::Error>> {
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_seconds))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| format!("HTTP客户端创建失败: {}", e))?;
 
-        Self {
+        Ok(Self {
             client,
             api_key,
             base_url,
-        }
+        })
     }
 
     /// 流式请求 DeepSeek API

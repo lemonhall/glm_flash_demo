@@ -5,6 +5,11 @@ use crate::{
     quota::QuotaStatus,
     AppState,
 };
+
+// HTTP 头部常量
+const CONTENT_TYPE_SSE: &str = "text/event-stream";
+const CACHE_CONTROL_NO_CACHE: &str = "no-cache";
+const CONNECTION_KEEP_ALIVE: &str = "keep-alive";
 use axum::{
     body::Body,
     extract::State,
@@ -53,9 +58,18 @@ pub async fn proxy_chat(
 
     // 6. 构建 SSE 响应头
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "text/event-stream".parse().expect("有效的HTTP头值"));
-    headers.insert(header::CACHE_CONTROL, "no-cache".parse().expect("有效的HTTP头值"));
-    headers.insert(header::CONNECTION, "keep-alive".parse().expect("有效的HTTP头值"));
+    headers.insert(
+        header::CONTENT_TYPE, 
+        CONTENT_TYPE_SSE.parse().map_err(|_| AppError::InternalError("无效的Content-Type头".to_string()))?
+    );
+    headers.insert(
+        header::CACHE_CONTROL, 
+        CACHE_CONTROL_NO_CACHE.parse().map_err(|_| AppError::InternalError("无效的Cache-Control头".to_string()))?
+    );
+    headers.insert(
+        header::CONNECTION, 
+        CONNECTION_KEEP_ALIVE.parse().map_err(|_| AppError::InternalError("无效的Connection头".to_string()))?
+    );
 
     Ok((StatusCode::OK, headers, stream_body).into_response())
 }

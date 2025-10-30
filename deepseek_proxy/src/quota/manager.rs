@@ -72,7 +72,9 @@ impl QuotaManager {
                 monthly_limit: tier.limit(),
                 used_count: 0,
                 last_saved_count: 0,
-                reset_at: Self::next_month_reset().to_rfc3339(),
+                reset_at: Self::next_month_reset()
+                    .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?
+                    .to_rfc3339(),
                 last_saved_at: None,
                 dirty: true,
             }
@@ -121,7 +123,9 @@ impl QuotaManager {
             if now > current_reset_at {
                 state.used_count = 0;
                 state.last_saved_count = 0;
-                state.reset_at = Self::next_month_reset().to_rfc3339();
+                state.reset_at = Self::next_month_reset()
+                    .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?
+                    .to_rfc3339();
                 state.dirty = true;
                 
                 let username_clone = username.to_string();
@@ -245,18 +249,22 @@ impl QuotaManager {
     }
 
     /// 计算下个月1号 0点（UTC）
-    fn next_month_reset() -> DateTime<Utc> {
+    fn next_month_reset() -> Result<DateTime<Utc>, String> {
         let now = Utc::now();
         let next_month = if now.month() == 12 {
             NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
-                .expect("有效的日期参数") // 已知安全的日期
+                .ok_or_else(|| "下年度1月1日创建失败".to_string())?
         } else {
             NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
-                .expect("有效的日期参数") // 已知安全的日期
+                .ok_or_else(|| "下月1日创建失败".to_string())?
         };
-        DateTime::from_naive_utc_and_offset(
-            next_month.and_hms_opt(0, 0, 0).expect("有效的时间参数"), // 00:00:00 是有效时间
+        
+        let naive_datetime = next_month.and_hms_opt(0, 0, 0)
+            .ok_or_else(|| "时间00:00:00创建失败".to_string())?;
+            
+        Ok(DateTime::from_naive_utc_and_offset(
+            naive_datetime,
             Utc
-        )
+        ))
     }
 }
