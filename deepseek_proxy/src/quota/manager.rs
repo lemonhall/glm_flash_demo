@@ -201,26 +201,31 @@ impl QuotaManager {
 
     /// 保存单个用户数据
     async fn save_one(&self, username: &str) -> Result<(), AppError> {
-        let cache = self.cache.lock().await;
-        let state = cache
-            .get(username)
-            .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
-        
+        // 1. 快速获取锁，克隆数据，立即释放锁（避免阻塞其他用户）
+        let state = {
+            let cache = self.cache.lock().await;
+            cache
+                .get(username)
+                .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?
+                .clone()  // 克隆数据
+        }; // 锁在这里释放！
+
+        // 2. 在锁外进行磁盘 I/O（不阻塞其他用户的配额检查）
         let file_path = self.data_dir.join(format!("{}.json", username));
         let temp_path = file_path.with_extension("tmp");
-        
+
         // 原子写入：先写临时文件，再重命名
-        let json = serde_json::to_string_pretty(state)
+        let json = serde_json::to_string_pretty(&state)
             .map_err(|e| AppError::InternalError(format!("序列化配额数据失败: {}", e)))?;
-        
+
         tokio::fs::write(&temp_path, json)
             .await
             .map_err(|e| AppError::InternalError(format!("写入配额文件失败: {}", e)))?;
-        
+
         tokio::fs::rename(temp_path, file_path)
             .await
             .map_err(|e| AppError::InternalError(format!("重命名配额文件失败: {}", e)))?;
-        
+
         Ok(())
     }
 
