@@ -69,7 +69,7 @@ impl QuotaManager {
             QuotaState {
                 username: username.to_string(),
                 tier: tier.as_str().to_string(),
-                monthly_limit: tier.limit(),
+                monthly_limit: tier.limit(&self.config.quota.tiers),
                 used_count: 0,
                 last_saved_count: 0,
                 reset_at: Self::next_month_reset()

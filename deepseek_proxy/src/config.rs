@@ -96,6 +96,18 @@ pub struct QuotaConfig {
     pub save_interval: u32,  // 每N次请求写一次磁盘
     #[serde(default = "default_monthly_reset_day")]
     pub monthly_reset_day: u32,  // 每月几号重置
+    #[serde(default)]
+    pub tiers: QuotaTiersConfig,  // 配额档次限制
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuotaTiersConfig {
+    #[serde(default = "default_basic_quota")]
+    pub basic: u32,
+    #[serde(default = "default_pro_quota")]
+    pub pro: u32,
+    #[serde(default = "default_premium_quota")]
+    pub premium: u32,
 }
 
 impl Default for QuotaConfig {
@@ -103,17 +115,26 @@ impl Default for QuotaConfig {
         Self {
             save_interval: 100,
             monthly_reset_day: 1,
+            tiers: QuotaTiersConfig::default(),
         }
     }
 }
 
-fn default_save_interval() -> u32 {
-    100
+impl Default for QuotaTiersConfig {
+    fn default() -> Self {
+        Self {
+            basic: 500,
+            pro: 1000,
+            premium: 1500,
+        }
+    }
 }
 
-fn default_monthly_reset_day() -> u32 {
-    1
-}
+fn default_save_interval() -> u32 { 100 }
+fn default_monthly_reset_day() -> u32 { 1 }
+fn default_basic_quota() -> u32 { 500 }
+fn default_pro_quota() -> u32 { 1000 }
+fn default_premium_quota() -> u32 { 1500 }
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {

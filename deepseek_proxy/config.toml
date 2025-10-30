@@ -50,5 +50,11 @@ queue_capacity = 20
 queue_timeout_seconds = 5
 
 [quota]
-save_interval = 100  # 每100次请求写一次磁盘
+save_interval = 5  # 每100次请求写一次磁盘
 monthly_reset_day = 1  # 每月1号重置
+
+# 配额档次限制配置
+[quota.tiers]
+basic = 500      # 基础版：500次/月
+pro = 1000       # 专业版：1000次/月  
+premium = 1500   # 高级版：1500次/月

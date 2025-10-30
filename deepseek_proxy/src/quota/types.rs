@@ -11,12 +11,12 @@ pub enum QuotaTier {
 }
 
 impl QuotaTier {
-    /// 获取配额上限
-    pub fn limit(&self) -> u32 {
+    /// 获取配额上限（从配置中读取）
+    pub fn limit(&self, config: &crate::config::QuotaTiersConfig) -> u32 {
         match self {
-            QuotaTier::Basic => 500,
-            QuotaTier::Pro => 1000,
-            QuotaTier::Premium => 1500,
+            QuotaTier::Basic => config.basic,
+            QuotaTier::Pro => config.pro,
+            QuotaTier::Premium => config.premium,
         }
     }
 
