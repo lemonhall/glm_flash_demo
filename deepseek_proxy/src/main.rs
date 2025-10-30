@@ -13,7 +13,7 @@ use axum::{
 };
 use config::Config;
 use deepseek::DeepSeekClient;
-use proxy::{proxy_chat, TokenLimiter, LoginLimiter};
+use proxy::{proxy_chat, LoginLimiter};
 use quota::QuotaManager;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,8 +26,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub jwt_service: Arc<JwtService>,
     pub deepseek_client: Arc<DeepSeekClient>,
-    pub token_limiter: Arc<TokenLimiter>,
-    pub login_limiter: Arc<LoginLimiter>,
+    pub login_limiter: Arc<LoginLimiter>, // 现在统一管理Token生命周期和并发控制
     pub quota_manager: Arc<QuotaManager>,
 }
 
@@ -62,7 +61,6 @@ async fn main() -> anyhow::Result<()> {
         config.deepseek.timeout_seconds,
     ));
 
-    let token_limiter = Arc::new(TokenLimiter::new());
     let login_limiter = Arc::new(LoginLimiter::new(config.auth.token_ttl_seconds));
 
     // 初始化配额管理器
@@ -84,8 +82,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         jwt_service,
         deepseek_client,
-        token_limiter,
-        login_limiter,
+        login_limiter, // 统一管理Token生命周期和并发控制
         quota_manager: quota_manager.clone(),
     };
 

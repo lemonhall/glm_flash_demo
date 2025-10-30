@@ -16,7 +16,7 @@ use axum::{
 /// 代理聊天请求到 DeepSeek API
 pub async fn proxy_chat(
     State(state): State<AppState>,
-    Extension(token): Extension<String>,
+    Extension(_token): Extension<String>,
     Extension(claims): Extension<Claims>,
     Json(mut request): Json<ChatRequest>,
 ) -> Result<Response, AppError> {
@@ -39,8 +39,8 @@ pub async fn proxy_chat(
         }
     }
 
-    // 2. 获取该 token 的限流许可（同一 token 同时只允耸1个请求）
-    let _permit = state.token_limiter.acquire(&token).await?;
+    // 2. 通过用户名获取Token许可（统一的生命周期和并发控制）
+    let _permit = state.login_limiter.acquire_permit_by_username(&claims.sub).await?;
 
     // 3. 强制设置为流式
     request.stream = true;

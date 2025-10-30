@@ -4,7 +4,7 @@ port = 8877
 
 [auth]
 jwt_secret = "your-secret-key-change-in-production"
-token_ttl_seconds = 3600
+token_ttl_seconds = 60
 
 # 硬编码用户列表 (生产环境应使用数据库)
 [[auth.users]]
