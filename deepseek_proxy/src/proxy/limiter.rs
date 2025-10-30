@@ -73,6 +73,16 @@ impl LoginLimiter {
         let now = Instant::now();
         let mut cache = self.cache.lock().await;
 
+        // 懒清理：清理所有过期的缓存条目
+        let before_count = cache.len();
+        cache.retain(|_, (_, expires_at)| now < *expires_at);
+        let after_count = cache.len();
+        let cleaned = before_count - after_count;
+        
+        if cleaned > 0 {
+            tracing::debug!("LoginLimiter 清理了 {} 个过期缓存条目，剩余 {} 个", cleaned, after_count);
+        }
+
         // 检查缓存
         if let Some((token, expires_at)) = cache.get(username) {
             if now < *expires_at {
@@ -91,7 +101,8 @@ impl LoginLimiter {
         Ok(token)
     }
 
-    /// 清理过期缓存（可选，定期调用）
+    /// 清理过期缓存（已废弃，现在使用懒清理）
+    #[deprecated(note = "现在在 get_or_generate 中自动清理，无需手动调用")]
     pub async fn cleanup(&self) {
         let now = Instant::now();
         let mut cache = self.cache.lock().await;
