@@ -19,12 +19,13 @@ pub struct ServerConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthConfig {
-    pub users: Vec<User>,
+    #[serde(default)]
+    pub users: Vec<User>,  // 可选，默认为空数组（用户从 data/users/ 加载）
     pub jwt_secret: String,
     pub token_ttl_seconds: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct User {
     pub username: String,
     pub password: String,
@@ -32,6 +33,10 @@ pub struct User {
     pub quota_tier: String,  // "basic", "pro", "premium"
     #[serde(default = "default_is_active")]
     pub is_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 fn default_quota_tier() -> String {

@@ -83,13 +83,14 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("配额: 每 {} 次请求写一次磁盘", config.quota.save_interval);
 
-    // 初始化用户管理器
-    let config_path = PathBuf::from("config.toml");
-    let user_manager = Arc::new(auth::UserManager::new(
-        config.auth.users.clone(),
-        config_path,
-    ));
-    tracing::info!("用户管理器初始化完成，支持动态管理用户状态");
+    // 初始化用户管理器（基于文件存储）
+    let users_dir = PathBuf::from("data/users");
+    let user_manager = Arc::new(
+        auth::UserManager::new(users_dir, config.auth.users.clone())
+            .await
+            .map_err(|e| anyhow::anyhow!("用户管理器初始化失败: {}", e))?
+    );
+    tracing::info!("用户管理器初始化完成，用户数据存储在 data/users/");
 
     let config = Arc::new(config);
 
@@ -120,7 +121,10 @@ async fn main() -> anyhow::Result<()> {
     let admin_routes = Router::new()
         .route("/admin/users/:username/active", post(admin::set_user_active))
         .route("/admin/users/:username", axum::routing::get(admin::get_user))
-        .route("/admin/users", axum::routing::get(admin::list_users))
+        .route("/admin/users",
+            axum::routing::get(admin::list_users)
+                .post(admin::create_user)
+        )
         .layer(middleware::from_fn(admin::localhost_only))
         .with_state(app_state.clone());
 

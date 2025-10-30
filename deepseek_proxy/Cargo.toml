@@ -36,7 +36,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # 时间处理
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 
 # 错误处理
 anyhow = "1.0"

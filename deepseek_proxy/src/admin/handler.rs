@@ -82,3 +82,41 @@ pub async fn list_users(
 
     Ok(Json(ListUsersResponse { users }))
 }
+
+/// 创建用户请求
+#[derive(Debug, Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+    #[serde(default = "default_quota_tier")]
+    pub quota_tier: String,
+}
+
+fn default_quota_tier() -> String {
+    "basic".to_string()
+}
+
+/// 创建用户响应
+#[derive(Debug, Serialize)]
+pub struct CreateUserResponse {
+    pub username: String,
+    pub message: String,
+}
+
+/// 管理接口：创建新用户
+pub async fn create_user(
+    State(state): State<AppState>,
+    Json(req): Json<CreateUserRequest>,
+) -> Result<Json<CreateUserResponse>, AppError> {
+    state.user_manager
+        .create_user(req.username.clone(), req.password, req.quota_tier)
+        .await?;
+
+    Ok(Json(CreateUserResponse {
+        username: req.username.clone(),
+        message: format!("用户 {} 已创建", req.username),
+    }))
+}
+
+// 注意：不提供物理删除功能
+// 要"删除"用户，请使用 POST /admin/users/:username/active 并设置 is_active = false

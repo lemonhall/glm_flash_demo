@@ -2,23 +2,9 @@
 jwt_secret = "your-secret-key-change-in-production"
 token_ttl_seconds = 60
 
-[[auth.users]]
-is_active = true
-password = "admin123"
-quota_tier = "premium"
-username = "admin"
-
-[[auth.users]]
-is_active = true
-password = "pass123"
-quota_tier = "basic"
-username = "user1"
-
-[[auth.users]]
-is_active = true
-password = "pass456"
-quota_tier = "pro"
-username = "user2"
+# 用户配置存储在 data/users/ 目录（每个用户一个 .toml 文件）
+# 支持动态修改，无需重启服务
+# 如果需要添加初始用户，可以在这里定义 [[auth.users]]，服务首次启动时会自动导入
 
 [deepseek]
 api_key = ""
