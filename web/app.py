@@ -18,7 +18,6 @@ app = FastAPI(title="DeepSeek Admin Panel")
 # ============ 配置 ============
 PROXY_URL = "http://localhost:8877"
 METRICS_URL = f"{PROXY_URL}/metrics"
-QUOTAS_DIR = Path(__file__).parent.parent / "deepseek_proxy" / "data" / "quotas"
 USERS_DIR = Path(__file__).parent.parent / "deepseek_proxy" / "data" / "users"
 LOGS_DIR = Path(__file__).parent.parent / "deepseek_proxy" / "logs" / "users"
 
@@ -159,10 +158,6 @@ FRONTEND_HTML = """<!DOCTYPE html>
           <div class="chart-title">📈 登录统计 (累计)</div>
           <canvas id="loginChart" width="400" height="200"></canvas>
         </div>
-        <div class="chart-container">
-          <div class="chart-title">💾 用户配额</div>
-          <canvas id="quotaChart" width="400" height="200"></canvas>
-        </div>
       </div>
       <div class="active-users">
         <div class="active-users-title">👥 近60分钟活跃用户</div>
@@ -181,7 +176,7 @@ FRONTEND_HTML = """<!DOCTYPE html>
     const state = {
       history: [],
       loginChart: null,
-      quotaChart: null
+  quotaChart: null // deprecated
     };
 
     // 获取数据
@@ -224,40 +219,12 @@ FRONTEND_HTML = """<!DOCTYPE html>
       ctx.fillText('失败: ' + failure, 295, 145);
     }
 
-    // 创建/更新配额图表
-    function updateQuotaChart(data) {
-      const canvas = document.getElementById('quotaChart');
-      const ctx = canvas.getContext('2d');
-      
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      const quotas = data.data.quotas;
-      const users = Object.keys(quotas);
-      if (users.length === 0) {
-        ctx.fillStyle = '#999';
-        ctx.font = '14px Arial';
-        ctx.fillText('暂无配额数据', 200, 100);
-        return;
-      }
-      
-      // 简单柱状图
-      const width = canvas.width / users.length;
-      users.forEach((user, i) => {
-        const val = quotas[user];
-        const height = (val / 100) * 100; // 假设配额最大 100
-        ctx.fillStyle = '#3498db';
-        ctx.fillRect(i * width + 10, 120 - height, width - 20, height);
-        ctx.fillStyle = '#333';
-        ctx.font = '10px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(user, i * width + width / 2, 140);
-        ctx.fillText(val, i * width + width / 2, 155);
-      });
-    }
 
     // 更新卡片
     function updateCards(data) {
       const container = document.getElementById('cards');
+      // 防御性：如果后端还没返回 cost_estimate，构造默认对象
+      const ce = (data.data.metrics && data.data.metrics.cost_estimate) ? data.data.metrics.cost_estimate : {hit_cost:0, miss_cost:0, output_cost:0, total_cost:0};
       
       const cards = [
         { label: '登录成功', value: data.data.metrics.login_success, className: 'success' },
@@ -265,13 +232,19 @@ FRONTEND_HTML = """<!DOCTYPE html>
         { label: '暴力破解阻断', value: data.data.metrics.bruteforce_blocked, className: 'alert' },
         { label: '限流拒绝', value: data.data.metrics.rate_limit_reject, className: 'warning' },
         { label: '聊天请求', value: data.data.metrics.chat_success, className: 'success' },
-        { label: '配额超限', value: data.data.metrics.quota_exceeded, className: 'alert' }
+  // 配额相关已移除
+        { label: '今日输入Tokens', value: data.data.metrics.today_input_tokens, className: 'warning' },
+        { label: '今日输出Tokens', value: data.data.metrics.today_output_tokens, className: 'warning' },
+        { label: '缓存命中Tokens', value: data.data.metrics.today_cache_hit_tokens, className: 'success' },
+        { label: '缓存未命中Tokens', value: data.data.metrics.today_cache_miss_tokens, className: 'warning' },
+        { label: '今日预估费用(¥)', value: ce.total_cost.toFixed(2), className: 'alert' },
+        { label: '费用明细(¥)', value: `${ce.hit_cost.toFixed(2)} / ${ce.miss_cost.toFixed(2)} / ${ce.output_cost.toFixed(2)}`, className: 'warning', extra: '命中 / 未命中 / 输出' }
       ];
 
       container.innerHTML = cards.map(card => `
         <div class="card ${card.className}">
-          <div class="card-label">${card.label}</div>
-          <div class="card-value">${Math.round(card.value)}</div>
+          <div class="card-label">${card.label}${card.extra ? ' <span style="color:#999;font-weight:normal">'+card.extra+'</span>' : ''}</div>
+          <div class="card-value">${typeof card.value === 'number' ? Math.round(card.value) : card.value}</div>
         </div>
       `).join('');
     }
@@ -294,7 +267,6 @@ FRONTEND_HTML = """<!DOCTYPE html>
         
         updateCards(data);
         updateLoginChart(data);
-        updateQuotaChart(data);
         updateActiveUsers(data);
         
       } catch (error) {
@@ -366,24 +338,6 @@ def extract_metric_value(metrics: dict, name: str, label_key: str = None, label_
     return 0.0
 
 
-def load_quotas() -> dict:
-    """加载所有用户配额"""
-    quotas = {}
-    if not QUOTAS_DIR.exists():
-        return quotas
-    
-    for f in QUOTAS_DIR.glob('*.json'):
-        try:
-            data = json.loads(f.read_text())
-            # remaining = monthly_limit - used_count
-            monthly_limit = data.get('monthly_limit', 0)
-            used_count = data.get('used_count', 0)
-            remaining = max(0, monthly_limit - used_count)
-            quotas[f.stem] = remaining
-        except Exception:
-            pass
-    
-    return quotas
 
 
 def get_active_users(minutes: int = 60) -> list:
@@ -429,49 +383,62 @@ async def root():
 
 @app.get("/api/overview")
 async def get_overview():
-    """获取完整概览数据"""
-    try:
-        # 获取 metrics
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(METRICS_URL)
-            metrics_text = resp.text if resp.status_code == 200 else ""
-        
-        metrics = parse_prometheus_metrics(metrics_text)
-        
-        # 获取配额
-        quotas = load_quotas()
-        
-        # 获取活跃用户
-        active_users = get_active_users(60)
-        
-        # 提取关键指标
-        login_success = extract_metric_value(metrics, 'login_attempts_total', 'result', 'success')
-        login_failure = extract_metric_value(metrics, 'login_attempts_total', 'result', 'failure')
-        bruteforce_blocked = extract_metric_value(metrics, 'login_bruteforce_blocked_total')
-        rate_limit_reject = extract_metric_value(metrics, 'rate_limit_rejections_total')
-        chat_success = extract_metric_value(metrics, 'chat_requests_total', 'status', 'success')
-        quota_exceeded = extract_metric_value(metrics, 'quota_checks_total', 'status', 'exceeded')
-        
-        return JSONResponse({
-            "success": True,
-            "data": {
-                "metrics": {
-                    "login_success": int(login_success),
-                    "login_failure": int(login_failure),
-                    "bruteforce_blocked": int(bruteforce_blocked),
-                    "rate_limit_reject": int(rate_limit_reject),
-                    "chat_success": int(chat_success),
-                    "quota_exceeded": int(quota_exceeded),
-                },
-                "quotas": quotas,
-                "active_users": active_users,
-            }
-        })
-    except Exception as e:
-        return JSONResponse({
-            "success": False,
-            "error": str(e)
-        }, status_code=500)
+  """获取完整概览数据"""
+  try:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+      resp = await client.get(METRICS_URL)
+      metrics_text = resp.text if resp.status_code == 200 else ""
+
+    metrics = parse_prometheus_metrics(metrics_text)
+    active_users = get_active_users(60)
+
+    login_success = extract_metric_value(metrics, 'login_attempts_total', 'result', 'success')
+    login_failure = extract_metric_value(metrics, 'login_attempts_total', 'result', 'failure')
+    bruteforce_blocked = extract_metric_value(metrics, 'login_bruteforce_blocked_total')
+    rate_limit_reject = extract_metric_value(metrics, 'rate_limit_rejections_total')
+    chat_success = extract_metric_value(metrics, 'chat_requests_total', 'status', 'success')
+    quota_exceeded = extract_metric_value(metrics, 'quota_checks_total', 'status', 'exceeded')
+    today_input_tokens = extract_metric_value(metrics, 'today_input_tokens')
+    today_output_tokens = extract_metric_value(metrics, 'today_output_tokens')
+    today_cache_hit_tokens = extract_metric_value(metrics, 'today_prompt_cache_hit_tokens')
+    today_cache_miss_tokens = extract_metric_value(metrics, 'today_prompt_cache_miss_tokens')
+
+    hit_tokens = today_cache_hit_tokens
+    miss_tokens = today_cache_miss_tokens
+    if hit_tokens == 0 and miss_tokens == 0 and today_input_tokens > 0:
+      miss_tokens = today_input_tokens
+
+    hit_cost = hit_tokens / 1_000_000 * 0.2
+    miss_cost = miss_tokens / 1_000_000 * 2.0
+    output_cost = today_output_tokens / 1_000_000 * 3.0
+    total_cost = hit_cost + miss_cost + output_cost
+
+    return JSONResponse({
+      "success": True,
+      "data": {
+        "metrics": {
+          "login_success": int(login_success),
+          "login_failure": int(login_failure),
+          "bruteforce_blocked": int(bruteforce_blocked),
+          "rate_limit_reject": int(rate_limit_reject),
+          "chat_success": int(chat_success),
+          "quota_exceeded": int(quota_exceeded),
+          "today_input_tokens": int(today_input_tokens),
+          "today_output_tokens": int(today_output_tokens),
+          "today_cache_hit_tokens": int(today_cache_hit_tokens),
+          "today_cache_miss_tokens": int(today_cache_miss_tokens),
+          "cost_estimate": {
+            "hit_cost": round(hit_cost, 6),
+            "miss_cost": round(miss_cost, 6),
+            "output_cost": round(output_cost, 6),
+            "total_cost": round(total_cost, 6)
+          }
+        },
+        "active_users": active_users,
+      }
+    })
+  except Exception as e:
+    return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 if __name__ == "__main__":
