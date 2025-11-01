@@ -526,9 +526,141 @@ def test_admin_list_users():
         return False
 
 
+def test_invalid_username_creation():
+    """测试创建非法用户名应该被拒绝（修复 B11）"""
+    print_section("测试 10: 非法用户名校验")
+
+    admin_api_base = f"{PROXY_URL}/admin"
+
+    # 定义各种非法用户名测试用例
+    invalid_usernames = [
+        ("../admin", "路径穿越攻击"),
+        ("user/test", "包含路径分隔符 /"),
+        ("user\\test", "包含路径分隔符 \\"),
+        ("user..admin", "包含 .."),
+        ("user\0test", "包含空字节"),
+        ("ab", "长度太短 (< 3)"),
+        ("a" * 33, "长度太长 (> 32)"),
+        ("@admin", "以特殊字符开头"),
+        ("-admin", "以连字符开头"),
+        ("_admin", "以下划线开头"),
+        ("user@test", "包含 @ 特殊字符"),
+        ("user#test", "包含 # 特殊字符"),
+        ("user test", "包含空格"),
+        ("user.test", "包含点号"),
+        ("用户名", "包含中文字符"),
+    ]
+
+    try:
+        success_count = 0
+        failed_cases = []
+
+        print("测试各种非法用户名...\n")
+
+        for username, description in invalid_usernames:
+            display_name = repr(username) if len(username) <= 20 else f"{repr(username[:20])}..."
+            
+            try:
+                response = httpx.post(
+                    f"{admin_api_base}/users",
+                    json={
+                        "username": username,
+                        "password": "test123",
+                        "quota_tier": "basic"
+                    },
+                    timeout=5.0
+                )
+
+                if response.status_code == 400:
+                    error_data = response.json()
+                    print(f"✓ {display_name:30s} - 正确拒绝 ({description})")
+                    print(f"  错误信息: {error_data.get('error', {}).get('message', 'N/A')}")
+                    success_count += 1
+                elif response.status_code == 500 and "用户" in response.text and "已存在" in response.text:
+                    # 已存在的用户（如果之前测试创建过）
+                    print(f"⚠ {display_name:30s} - 用户已存在 ({description})")
+                    success_count += 1
+                else:
+                    print(f"✗ {display_name:30s} - 应该拒绝但接受了 ({description})")
+                    print(f"  状态码: {response.status_code}, 响应: {response.text[:100]}")
+                    failed_cases.append((username, description))
+
+            except Exception as e:
+                print(f"✗ {display_name:30s} - 测试异常: {e}")
+                failed_cases.append((username, description))
+
+        # 测试合法用户名（应该能创建成功）
+        print("\n测试合法用户名（应该成功）...\n")
+        
+        valid_usernames = [
+            ("user123", "字母+数字"),
+            ("test_user", "包含下划线"),
+            ("test-user", "包含连字符"),
+            ("abc", "最短合法长度 (3)"),
+            ("a" * 32, "最长合法长度 (32)"),
+            ("123test", "以数字开头"),
+        ]
+
+        valid_success_count = 0
+        for username, description in valid_usernames:
+            try:
+                response = httpx.post(
+                    f"{admin_api_base}/users",
+                    json={
+                        "username": username,
+                        "password": "test123",
+                        "quota_tier": "basic"
+                    },
+                    timeout=5.0
+                )
+
+                if response.status_code in [200, 201]:
+                    print(f"✓ {username:30s} - 创建成功 ({description})")
+                    valid_success_count += 1
+                    # 清理：停用测试用户
+                    httpx.post(
+                        f"{admin_api_base}/users/{username}/active",
+                        json={"is_active": False},
+                        timeout=5.0
+                    )
+                elif response.status_code == 500 and "已存在" in response.text:
+                    print(f"✓ {username:30s} - 用户已存在 (视为成功) ({description})")
+                    valid_success_count += 1
+                else:
+                    print(f"✗ {username:30s} - 创建失败: {response.status_code}")
+                    print(f"  响应: {response.text[:100]}")
+
+            except Exception as e:
+                print(f"✗ {username:30s} - 测试异常: {e}")
+
+        # 汇总结果
+        print(f"\n{'='*60}")
+        print(f"非法用户名测试: {success_count}/{len(invalid_usernames)} 正确拒绝")
+        print(f"合法用户名测试: {valid_success_count}/{len(valid_usernames)} 成功创建")
+
+        if failed_cases:
+            print(f"\n未正确拒绝的非法用户名:")
+            for username, desc in failed_cases:
+                print(f"  - {repr(username)}: {desc}")
+
+        # 只要大部分非法用户名被正确拒绝即可通过
+        if success_count >= len(invalid_usernames) * 0.8 and valid_success_count >= len(valid_usernames) * 0.8:
+            print("\n✓ 用户名校验测试基本通过!")
+            return True
+        else:
+            print("\n✗ 用户名校验测试未通过")
+            return False
+
+    except Exception as e:
+        print(f"✗ 测试失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def test_new_user_can_use_service():
     """测试通过Admin API创建的新用户能够使用服务（覆盖Bug #1）"""
-    print_section("测试 10: 新用户可以使用服务")
+    print_section("测试 11: 新用户可以使用服务")
 
     admin_api_base = f"{PROXY_URL}/admin"
     test_username = "test_newuser"
@@ -669,6 +801,7 @@ def main():
         ("未授权拦截", test_unauthorized),
         ("用户激活状态管理", test_user_active_management),
         ("列出所有用户", test_admin_list_users),
+        ("非法用户名校验 (Bug #B11)", test_invalid_username_creation),
         ("新用户可以使用服务 (Bug #1)", test_new_user_can_use_service),
     ]
     

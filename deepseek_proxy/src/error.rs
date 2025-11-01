@@ -10,6 +10,9 @@ pub enum AppError {
     #[error("认证失败: {0}")]
     Unauthorized(String),
 
+    #[error("请求参数错误: {0}")]
+    BadRequest(String),
+
     #[error("资源不存在: {0}")]
     NotFound(String),
 
@@ -40,6 +43,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg),
             AppError::PaymentRequired { used, limit, reset_at } => {
                 let body = Json(json!({

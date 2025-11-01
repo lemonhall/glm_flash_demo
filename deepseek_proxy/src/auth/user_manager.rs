@@ -152,8 +152,57 @@ impl UserManager {
             .collect()
     }
 
+    /// 校验用户名是否合法
+    /// 
+    /// 规则：
+    /// - 长度 3-32 字符
+    /// - 只允许字母、数字、下划线和连字符
+    /// - 必须以字母或数字开头
+    /// - 不能包含路径分隔符或特殊字符
+    fn validate_username(username: &str) -> Result<(), AppError> {
+        // 检查长度
+        if username.len() < 3 || username.len() > 32 {
+            return Err(AppError::BadRequest(
+                "用户名长度必须在 3-32 个字符之间".to_string()
+            ));
+        }
+
+        // 检查是否以字母或数字开头
+        if let Some(first_char) = username.chars().next() {
+            if !first_char.is_alphanumeric() {
+                return Err(AppError::BadRequest(
+                    "用户名必须以字母或数字开头".to_string()
+                ));
+            }
+        }
+
+        // 检查字符是否合法（只允许字母、数字、下划线、连字符）
+        for ch in username.chars() {
+            if !ch.is_alphanumeric() && ch != '_' && ch != '-' {
+                return Err(AppError::BadRequest(
+                    format!("用户名包含非法字符: '{}'. 只允许字母、数字、下划线和连字符", ch)
+                ));
+            }
+        }
+
+        // 检查是否包含路径相关的危险字符串
+        let dangerous_patterns = [".", "..", "/", "\\", "\0"];
+        for pattern in dangerous_patterns {
+            if username.contains(pattern) {
+                return Err(AppError::BadRequest(
+                    format!("用户名不能包含危险字符或模式: '{}'", pattern)
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     /// 创建新用户
     pub async fn create_user(&self, username: String, password: String, quota_tier: String) -> Result<(), AppError> {
+        // 校验用户名合法性
+        Self::validate_username(&username)?;
+
         // 检查用户是否已存在
         {
             let users = self.users.read().await;
