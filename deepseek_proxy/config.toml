@@ -15,12 +15,12 @@ timeout_seconds = 60
 connect_timeout_seconds = 10
 http2_adaptive_window = true
 pool_idle_timeout_seconds = 90
-pool_max_idle_per_host = 20
+pool_max_idle_per_host = 40
 tcp_nodelay = true
 
 [quota]
 monthly_reset_day = 1
-save_interval = 5
+save_interval = 25
 
 [quota.tiers]
 basic = 500
@@ -30,7 +30,7 @@ pro = 1000
 [rate_limit]
 # 全局速率限制配置（针对 1核1G 小型服务器）
 # 每秒允许的最大请求数
-requests_per_second = 10
+requests_per_second = 20
 # 突发容量会自动设为 requests_per_second * 2
 
 [server]

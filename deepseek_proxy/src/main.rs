@@ -25,6 +25,8 @@ use auth::bruteforce::BruteForceGuard;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
 
 // 统一的应用状态
 #[derive(Clone)]
@@ -79,6 +81,16 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // 初始化组件
+    // 加载今日指标快照（如果存在）
+    if let Err(e) = metrics::METRICS.load_today() {
+        tracing::warn!("加载今日指标快照失败: {}", e);
+    } else {
+        tracing::info!("今日指标快照加载完成");
+    }
+    // 清理超过 90 天的历史指标文件
+    if let Err(e) = metrics::METRICS.cleanup_old_days(90) {
+        tracing::warn!("清理指标历史文件失败: {}", e);
+    }
     let jwt_service = Arc::new(JwtService::new(
         config.auth.jwt_secret.clone(),
         effective_ttl,  // 使用安全限制后的 TTL
@@ -207,9 +219,23 @@ async fn main() -> anyhow::Result<()> {
 
 /// 优雅关闭信号处理
 async fn shutdown_signal(quota_manager: Arc<QuotaManager>) {
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        eprintln!("无法监听 Ctrl+C 信号: {}", e);
-        return;
+    // 同时监听 Ctrl+C 与 SIGTERM (unix)
+    #[cfg(unix)]
+    let mut term_stream = signal(SignalKind::terminate()).expect("无法监听 SIGTERM");
+
+    #[cfg(unix)]
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => { println!("\n🔻 收到 Ctrl+C，开始优雅关闭..."); }
+        _ = term_stream.recv() => { println!("\n🔻 收到 SIGTERM，开始优雅关闭..."); }
+    };
+
+    #[cfg(not(unix))]
+    {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            eprintln!("无法监听 Ctrl+C 信号: {}", e);
+            return;
+        }
+        println!("\n🔻 收到 Ctrl+C，开始优雅关闭...");
     }
     
     println!("\n📦 正在保存配额数据...");
@@ -218,5 +244,11 @@ async fn shutdown_signal(quota_manager: Arc<QuotaManager>) {
         eprintln!("❌ 保存失败: {}", e);
     } else {
         println!("✅ 数据已保存");
+    }
+
+    println!("📝 正在保存今日指标快照...");
+    match crate::metrics::METRICS.save_today() {
+        Ok(()) => println!("✅ 指标快照已保存"),
+        Err(e) => eprintln!("❌ 指标保存失败: {}", e),
     }
 }

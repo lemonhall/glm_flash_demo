@@ -1,0 +1,6 @@
+username = "abc"
+password = "test123"
+quota_tier = "basic"
+is_active = false
+created_at = "2025-11-01T21:44:32.830051900+08:00"
+updated_at = "2025-11-01T21:44:33.725379900+08:00"

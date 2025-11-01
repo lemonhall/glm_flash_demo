@@ -1,0 +1,14 @@
+{
+  "date": "2025-11-01",
+  "login_success": 12,
+  "login_fail": 0,
+  "login_bruteforce_blocked": 0,
+  "rate_limit_rejections": 0,
+  "chat_success": 5,
+  "chat_fail": 0,
+  "today_input_tokens": 70,
+  "today_output_tokens": 206,
+  "today_prompt_cache_hit_tokens": 0,
+  "today_prompt_cache_miss_tokens": 38,
+  "updated_at": "2025-11-01T21:44:51.597709700+08:00"
+}
