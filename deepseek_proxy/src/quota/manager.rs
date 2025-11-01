@@ -1,16 +1,16 @@
-use super::types::{QuotaState, QuotaStatus, QuotaTier};
+use super::types::{QuotaState, QuotaStateAtomic, QuotaStatus, QuotaTier};
 use crate::config::Config;
 use crate::error::AppError;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
-/// 配额管理器
+/// 配额管理器（优化版：使用 DashMap + 原子操作）
 pub struct QuotaManager {
-    /// 内存缓存: username -> QuotaState
-    cache: Arc<Mutex<HashMap<String, QuotaState>>>,
+    /// 内存缓存: username -> QuotaStateAtomic
+    /// 使用 DashMap 实现无锁并发访问，不同用户的操作互不阻塞
+    cache: Arc<DashMap<String, Arc<QuotaStateAtomic>>>,
 
     /// 配置
     config: Arc<Config>,
@@ -33,7 +33,7 @@ impl QuotaManager {
         save_interval: u32,
     ) -> Self {
         Self {
-            cache: Arc::new(Mutex::new(HashMap::new())),
+            cache: Arc::new(DashMap::new()),
             config,
             user_manager,
             data_dir,
@@ -41,30 +41,26 @@ impl QuotaManager {
         }
     }
 
-    /// 懒加载用户配额
-    async fn load_or_init(&self, username: &str) -> Result<(), AppError> {
+    /// 懒加载用户配额（优化版：使用 DashMap 的 entry API）
+    async fn load_or_init(&self, username: &str) -> Result<Arc<QuotaStateAtomic>, AppError> {
         // 1. 快速检查内存缓存
-        {
-            let cache = self.cache.lock().await;
-            if cache.contains_key(username) {
-                return Ok(());
-            }
+        if let Some(state) = self.cache.get(username) {
+            return Ok(state.clone());
         }
 
-        // 2. 尝试从磁盘加载（锁外IO）
+        // 2. 尝试从磁盘加载（无锁 IO）
         let file_path = self.data_dir.join(format!("{}.json", username));
         let state = if file_path.exists() {
             let content = tokio::fs::read_to_string(&file_path)
                 .await
                 .map_err(|e| AppError::InternalError(format!("读取配额文件失败: {}", e)))?;
 
-            let mut state: QuotaState = serde_json::from_str(&content)
+            let state: QuotaState = serde_json::from_str(&content)
                 .map_err(|e| AppError::InternalError(format!("解析配额数据失败: {}", e)))?;
 
-            state.dirty = false;
-            state
+            QuotaStateAtomic::from_state(state)
         } else {
-            // 3. 首次访问，从 UserManager 获取用户信息（支持动态创建的用户）
+            // 3. 首次访问，从 UserManager 获取用户信息
             let user = self.user_manager
                 .get_user(username)
                 .await
@@ -75,117 +71,89 @@ impl QuotaManager {
 
             tracing::info!("初始化用户 {} 的配额：档次={}, 限额={}", username, user.quota_tier, tier.limit(&self.config.quota.tiers));
 
-            QuotaState {
+            let reset_at = Self::next_month_reset()
+                .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?;
+
+            QuotaStateAtomic::from_state(QuotaState {
                 username: username.to_string(),
                 tier: tier.as_str().to_string(),
                 monthly_limit: tier.limit(&self.config.quota.tiers),
                 used_count: 0,
                 last_saved_count: 0,
-                reset_at: Self::next_month_reset()
-                    .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?,
+                reset_at,
                 last_saved_at: None,
                 dirty: true,
-            }
+            })
         };
 
-        // 4. 插入缓存
-        let mut cache = self.cache.lock().await;
-        // 双重检查（防止竞态条件）
-        if !cache.contains_key(username) {
-            cache.insert(username.to_string(), state);
-        }
-        Ok(())
+        // 4. 使用 DashMap 的 entry API 保证原子插入（避免竞态条件）
+        let state_arc = Arc::new(state);
+        self.cache
+            .entry(username.to_string())
+            .or_insert_with(|| state_arc.clone());
+
+        Ok(state_arc)
     }
 
-    /// 只检查配额（不扣费）
+    /// 只检查配额（不扣费）- 优化版：无锁读取
     pub async fn check_quota(&self, username: &str) -> Result<QuotaStatus, AppError> {
         // 确保用户数据已加载
-        self.load_or_init(username).await?;
+        let state = self.load_or_init(username).await?;
 
-        let cache = self.cache.lock().await;
-        let state = cache
-            .get(username)
-            .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
-
-        let reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
+        let reset_at_str = state.reset_at.read().await.clone();
+        let reset_at = DateTime::parse_from_rfc3339(&reset_at_str)
             .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?;
 
+        let used = state.get_used();
+        let limit = state.monthly_limit;
+
         // 只检查，不递增
-        if state.used_count >= state.monthly_limit {
+        if used >= limit {
             Ok(QuotaStatus::Exceeded {
-                used: state.used_count,
-                limit: state.monthly_limit,
+                used,
+                limit,
                 reset_at,
             })
         } else {
             Ok(QuotaStatus::Ok {
-                used: state.used_count,
-                limit: state.monthly_limit,
-                remaining: state.monthly_limit - state.used_count,
+                used,
+                limit,
+                remaining: limit - used,
                 reset_at,
             })
         }
     }
 
-    /// 递增配额（在确认请求成功后调用）
+    /// 递增配额（在确认请求成功后调用）- 优化版：原子操作
     pub async fn increment_quota(&self, username: &str) -> Result<(), AppError> {
         // 确保用户数据已加载
-        self.load_or_init(username).await?;
+        let state = self.load_or_init(username).await?;
 
         let now = Utc::now();
 
-        // 处理月度重置
+        // 检查是否需要月度重置
         let need_reset = {
-            let cache = self.cache.lock().await;
-            let state = cache
-                .get(username)
-                .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
-
-            let reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
+            let reset_at_str = state.reset_at.read().await.clone();
+            let reset_at = DateTime::parse_from_rfc3339(&reset_at_str)
                 .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?;
-
-            // 检查是否需要月度重置
             now > reset_at.with_timezone(&Utc)
         };
 
         if need_reset {
             tracing::info!("用户 {} 配额月度重置", username);
 
-            let mut cache = self.cache.lock().await;
-            let state = cache
-                .get_mut(username)
-                .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
+            let new_reset_at = Self::next_month_reset()
+                .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?;
 
-            // 再次检查重置时间，防止重复重置
-            let current_reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
-                .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?;
+            state.reset(new_reset_at).await;
 
-            if now > current_reset_at.with_timezone(&Utc) {
-                state.used_count = 0;
-                state.last_saved_count = 0;
-                state.reset_at = Self::next_month_reset()
-                    .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?;
-                state.dirty = true;
-
-                let username_clone = username.to_string();
-                drop(cache);
-
-                // 重置时立即保存
-                self.save_one_immediately(&username_clone).await?;
-            }
+            // 重置时立即保存
+            self.save_one_immediately(username, &state).await?;
         }
 
-        // 递增计数
-        let mut cache = self.cache.lock().await;
-        let state = cache
-            .get_mut(username)
-            .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
-
-        state.used_count += 1;
-        state.dirty = true;
-
-        let current_used = state.used_count;
-        let last_saved = state.last_saved_count;
+        // 原子递增计数（无锁操作）
+        let current_used = state.increment();
+        let last_saved = state.get_last_saved();
 
         // 每 N 次保存一次
         if current_used - last_saved >= self.save_interval {
@@ -196,146 +164,32 @@ impl QuotaManager {
                 self.save_interval
             );
 
-            state.last_saved_count = current_used;
-            state.last_saved_at = Some(crate::utils::now_beijing_rfc3339());
-            state.dirty = false;
+            state.update_last_saved(current_used);
+            *state.last_saved_at.write().await = Some(crate::utils::now_beijing_rfc3339());
 
-            drop(cache);  // 释放锁
-            self.save_one(username).await?;
+            self.save_one(username, &state).await?;
         }
 
         Ok(())
     }
 
-    /// 检查并递增配额（核心方法）- 已废弃，使用 check_quota + increment_quota
-    #[deprecated(note = "使用 check_quota + increment_quota 分离检查和扣费")]
-    pub async fn check_and_increment(&self, username: &str) -> Result<QuotaStatus, AppError> {
-        // 确保用户数据已加载
-        self.load_or_init(username).await?;
-        
-        let now = Utc::now();
-        
-        // 处理月度重置
-        let need_reset = {
-            let cache = self.cache.lock().await;
-            let state = cache
-                .get(username)
-                .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
-
-            let reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
-                .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?;
-
-            // 检查是否需要月度重置（比较时转换为 UTC）
-            now > reset_at.with_timezone(&Utc)
-        };
-        
-        if need_reset {
-            tracing::info!("用户 {} 配额月度重置", username);
-            
-            // 在锁内完成重置，避免竞态条件
-            let mut cache = self.cache.lock().await;
-            let state = cache
-                .get_mut(username)
-                .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
-            
-            // 再次检查重置时间，防止重复重置
-            let current_reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
-                .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?;
-
-            if now > current_reset_at.with_timezone(&Utc) {
-                state.used_count = 0;
-                state.last_saved_count = 0;
-                state.reset_at = Self::next_month_reset()
-                    .map_err(|e| AppError::InternalError(format!("重置时间计算失败: {}", e)))?;
-                state.dirty = true;
-                
-                let username_clone = username.to_string();
-                drop(cache);  // 在异步操作前释放锁
-                
-                // 重置时立即保存
-                self.save_one_immediately(&username_clone).await?;
-            }
-        }
-        
-        // 检查配额并递增
-        let mut cache = self.cache.lock().await;
-        let state = cache
-            .get_mut(username)
-            .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?;
-        
-        let reset_at = DateTime::parse_from_rfc3339(&state.reset_at)
-            .map_err(|e| AppError::InternalError(format!("解析重置时间失败: {}", e)))?;
-        
-        // 检查配额
-        if state.used_count >= state.monthly_limit {
-            return Ok(QuotaStatus::Exceeded {
-                used: state.used_count,
-                limit: state.monthly_limit,
-                reset_at,
-            });
-        }
-        
-        // 递增计数
-        state.used_count += 1;
-        state.dirty = true;
-        
-        let current_used = state.used_count;
-        let limit = state.monthly_limit;
-        let last_saved = state.last_saved_count;
-        
-        // 每 N 次保存一次
-        if current_used - last_saved >= self.save_interval {
-            tracing::debug!(
-                "用户 {} 达到保存间隔 ({}/{}), 写入磁盘",
-                username,
-                current_used - last_saved,
-                self.save_interval
-            );
-            
-            state.last_saved_count = current_used;
-            state.last_saved_at = Some(crate::utils::now_beijing_rfc3339());
-            state.dirty = false;
-            
-            drop(cache);  // 释放锁
-            self.save_one(username).await?;
-        }
-        
-        Ok(QuotaStatus::Ok {
-            used: current_used,
-            limit,
-            remaining: limit - current_used,
-            reset_at,
-        })
-    }
-
-    /// 查询配额信息（不递增）
+    /// 查询配额信息（不递增）- 优化版
     pub async fn get_quota(&self, username: &str) -> Result<QuotaState, AppError> {
-        self.load_or_init(username).await?;
-        
-        let cache = self.cache.lock().await;
-        cache
-            .get(username)
-            .cloned()
-            .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))
+        let state = self.load_or_init(username).await?;
+        Ok(state.to_state().await)
     }
 
-    /// 保存单个用户数据
-    async fn save_one(&self, username: &str) -> Result<(), AppError> {
-        // 1. 快速获取锁，克隆数据，立即释放锁（避免阻塞其他用户）
-        let state = {
-            let cache = self.cache.lock().await;
-            cache
-                .get(username)
-                .ok_or_else(|| AppError::InternalError("配额状态未找到".to_string()))?
-                .clone()  // 克隆数据
-        }; // 锁在这里释放！
+    /// 保存单个用户数据 - 优化版：直接接受 Arc<QuotaStateAtomic>
+    async fn save_one(&self, username: &str, state: &Arc<QuotaStateAtomic>) -> Result<(), AppError> {
+        // 转换为可序列化的 QuotaState
+        let quota_state = state.to_state().await;
 
-        // 2. 在锁外进行磁盘 I/O（不阻塞其他用户的配额检查）
+        // 磁盘 I/O（不阻塞其他用户的配额操作）
         let file_path = self.data_dir.join(format!("{}.json", username));
         let temp_path = file_path.with_extension("tmp");
 
         // 原子写入：先写临时文件，再重命名
-        let json = serde_json::to_string_pretty(&state)
+        let json = serde_json::to_string_pretty(&quota_state)
             .map_err(|e| AppError::InternalError(format!("序列化配额数据失败: {}", e)))?;
 
         tokio::fs::write(&temp_path, json)
@@ -350,26 +204,23 @@ impl QuotaManager {
     }
 
     /// 立即保存（重置、关闭时使用）
-    async fn save_one_immediately(&self, username: &str) -> Result<(), AppError> {
-        self.save_one(username).await
+    async fn save_one_immediately(&self, username: &str, state: &Arc<QuotaStateAtomic>) -> Result<(), AppError> {
+        self.save_one(username, state).await
     }
 
-    /// 保存所有脏数据（优雅关闭时调用）
+    /// 保存所有数据（优雅关闭时调用）- 优化版：使用 DashMap snapshot
     pub async fn save_all(&self) -> Result<(), AppError> {
-        let cache = self.cache.lock().await;
-        let dirty_users: Vec<String> = cache
+        // DashMap 支持无锁迭代，获取所有用户的快照
+        let users_snapshot: Vec<(String, Arc<QuotaStateAtomic>)> = self.cache
             .iter()
-            .filter(|(_, state)| state.dirty)
-            .map(|(username, _)| username.clone())
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
-        
-        drop(cache);  // 释放锁
-        
-        for username in dirty_users {
+
+        for (username, state) in users_snapshot {
             tracing::info!("保存用户 {} 的配额数据", username);
-            self.save_one(&username).await?;
+            self.save_one(&username, &state).await?;
         }
-        
+
         Ok(())
     }
 
