@@ -58,7 +58,7 @@ impl LoginLimiter {
     }
 
     /// 获取或生成 token
-    /// 如果 1 分钟内已经登录过，返回缓存的 token
+    /// 如果在有效期内已经登录过，返回缓存的 token（有效期由 ttl 参数决定，最多 60 秒）
     pub async fn get_or_generate<F, E>(&self, username: &str, generate_fn: F) -> Result<String, E>
     where
         F: FnOnce() -> Result<String, E>,

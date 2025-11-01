@@ -62,4 +62,9 @@ impl JwtService {
 
         Ok(token_data.claims)
     }
+
+    /// 获取 token 有效期（秒）
+    pub fn get_ttl_seconds(&self) -> u64 {
+        self.ttl_seconds as u64
+    }
 }

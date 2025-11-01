@@ -31,7 +31,7 @@ pub async fn login(
         return Err(AppError::Unauthorized("账户已被停用".to_string()));
     }
 
-    // 使用登录限流器：1 分钟内返回同一个 token
+    // 使用登录限流器：在有效期内返回同一个 token（最多 60 秒）
     let token = state.login_limiter
         .get_or_generate(&user.username, || {
             state
@@ -43,6 +43,6 @@ pub async fn login(
 
     Ok(Json(LoginResponse {
         token,
-        expires_in: state.config.auth.token_ttl_seconds,
+        expires_in: state.jwt_service.get_ttl_seconds(),  // 返回实际的 TTL（已被限制为最多 60 秒）
     }))
 }

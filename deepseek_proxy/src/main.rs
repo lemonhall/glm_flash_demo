@@ -55,7 +55,18 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("服务器地址: {}:{}", config.server.host, config.server.port);
     tracing::info!("DeepSeek API: {}", config.deepseek.base_url);
     tracing::info!("限流: 每个 token 同时只允许1个请求");
-    tracing::info!("登录: 每个用户每 {} 秒只能登录1次", config.auth.token_ttl_seconds.min(60));
+    
+    // 安全限制：登录缓存和 JWT TTL 最多 60 秒，防止 token 长时间有效
+    let effective_ttl = config.auth.token_ttl_seconds.min(60);
+    if config.auth.token_ttl_seconds > 60 {
+        tracing::warn!(
+            "配置的 token_ttl_seconds ({}) 超过安全限制，已强制限制为 60 秒",
+            config.auth.token_ttl_seconds
+        );
+    }
+    tracing::info!("登录缓存: 每个用户 {} 秒内复用同一 token", effective_ttl);
+    tracing::info!("JWT有效期: {} 秒", effective_ttl);
+    
     tracing::info!("HTTP客户端: 连接池={}个, 保活={}秒, 连接超时={}秒", 
         config.deepseek.http_client.pool_max_idle_per_host,
         config.deepseek.http_client.pool_idle_timeout_seconds,
@@ -65,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     // 初始化组件
     let jwt_service = Arc::new(JwtService::new(
         config.auth.jwt_secret.clone(),
-        config.auth.token_ttl_seconds,
+        effective_ttl,  // 使用安全限制后的 TTL
     ).map_err(|e| anyhow::anyhow!("JWT服务初始化失败: {}", e))?);
 
     let deepseek_client = Arc::new(DeepSeekClient::new(
@@ -75,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
         &config.deepseek.http_client,
     ).map_err(|e| anyhow::anyhow!("DeepSeek客户端初始化失败: {}", e))?);
 
-    let login_limiter = Arc::new(LoginLimiter::new(config.auth.token_ttl_seconds));
+    let login_limiter = Arc::new(LoginLimiter::new(effective_ttl));  // 使用安全限制后的 TTL
 
     // 初始化用户管理器（基于文件存储）- 必须在配额管理器之前
     let users_dir = PathBuf::from("data/users");
