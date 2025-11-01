@@ -1,6 +1,9 @@
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+
+/// JWT 使用的算法（明确指定，避免依赖默认值）
+const JWT_ALGORITHM: Algorithm = Algorithm::HS256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -43,8 +46,11 @@ impl JwtService {
             exp: exp_usize,
         };
 
+        // 明确指定使用 HS256 算法
+        let header = Header::new(JWT_ALGORITHM);
+        
         let token = encode(
-            &Header::default(),
+            &header,
             &claims,
             &EncodingKey::from_secret(self.secret.as_bytes()),
         )?;
@@ -54,10 +60,14 @@ impl JwtService {
 
     /// 验证 JWT token
     pub fn validate_token(&self, token: &str) -> anyhow::Result<Claims> {
+        // 创建验证配置，明确指定算法
+        let validation = Validation::new(JWT_ALGORITHM);
+        // 默认会验证 exp（过期时间），这里保持默认行为
+        
         let token_data = decode::<Claims>(
             token,
             &DecodingKey::from_secret(self.secret.as_bytes()),
-            &Validation::default(),
+            &validation,
         )?;
 
         Ok(token_data.claims)

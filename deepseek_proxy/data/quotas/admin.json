@@ -2,7 +2,7 @@
   "username": "admin",
   "tier": "premium",
   "monthly_limit": 1500,
-  "used_count": 10,
+  "used_count": 12,
   "last_saved_count": 10,
   "reset_at": "2025-12-01T08:00:00+08:00",
   "last_saved_at": "2025-11-01T12:33:53.797531600+08:00"
