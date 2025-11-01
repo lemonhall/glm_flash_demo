@@ -40,15 +40,36 @@
 
 文件：`deepseek_proxy/src/metrics.rs`
 
+当前代码实际导出名称（与 `/metrics` 输出一致）：
+
 | 名称 | 类型 | 标签 | 说明 | 更新位置示例 |
 |------|------|------|------|--------------|
-| `login_total` | Counter | `result` (success|failure) | 登录尝试次数 | `auth::handler::login` |
-| `login_bruteforce_blocked` | Counter | 无 | 暴力破解阻断次数 | `auth::handler::login` 阻断分支 |
-| `quota_check_total` | Counter | `status` (allow|deny) | 配额检查结果 | `proxy::handler` 在配额分支 |
-| `rate_limit_reject_total` | Counter | 无 | 全局/用户限流拒绝次数 | `proxy::handler` 限流失败分支 |
-| `chat_success_total` | Counter | 无 | 成功发起上游聊天（开始流）次数 | `proxy::handler` SSE 构建后 |
+| `login_attempts_total` | Counter | `result` (success|failure) | 登录尝试次数 | `auth::handler::login` |
+| `login_bruteforce_blocked_total` | Counter | 无 | 暴力破解阻断次数 | `auth::handler::login` 阻断分支 |
+| `quota_checks_total` | Counter | `status` (ok|exceeded) | 配额检查结果 | `proxy::handler` 配额分支 |
+| `rate_limit_rejections_total` | Counter | 无 | 全局/用户限流拒绝次数 | `proxy::handler` 限流失败分支 |
+| `chat_requests_total` | Counter | `status` (success|failure 可扩展) | 聊天请求结果（当前仅 success） | `proxy::handler` SSE 构建后 |
 | `upstream_latency_seconds` | Histogram | 无 | 上游接口首包延迟 | `deepseek::client` timer.observe |
 | `upstream_error_total` | Counter | `kind` (network|api) | 上游错误分类次数 | `deepseek::client` 错误分支 |
+
+### 2.0 名称对照与迁移建议
+为保持清晰，这里列出早期文档示例名称与现行名称的对照：
+
+| 旧示例名 | 现行名 | 备注 |
+|----------|--------|------|
+| `login_total` | `login_attempts_total` | 更语义化（attempts） |
+| `login_bruteforce_blocked` | `login_bruteforce_blocked_total` | 统一加 `_total` 后缀强调 counter |
+| `quota_check_total` | `quota_checks_total` | 复数体现累计事件 |
+| `rate_limit_reject_total` | `rate_limit_rejections_total` | 名称更自然（rejections） |
+| `chat_success_total` | `chat_requests_total` | 允许扩展失败标签 |
+| （相同）`upstream_latency_seconds` | `upstream_latency_seconds` | 保持不变 |
+| `upstream_error_total` | `upstream_error_total` | 保持不变 |
+
+迁移脚本（PromQL）示例：如果已有旧报警规则，可替换表达式中指标名。例如：
+```
+# 原：increase(rate_limit_reject_total[1m]) > 100
+# 新：increase(rate_limit_rejections_total[1m]) > 100
+```
 
 ### 2.1 指标语义与使用建议
 - 登录失败与暴力破解阻断之间的差异：阻断发生时通常已达到阈值，阻断次数急速上升可报警。
@@ -161,12 +182,16 @@ curl http://localhost:PORT/metrics
 ```
 输出类似：
 ```
-# HELP login_total Login attempts
-# TYPE login_total counter
-login_total{result="success"} 10
-login_total{result="failure"} 3
-# HELP login_bruteforce_blocked Brute force block events
-login_bruteforce_blocked 1
+# HELP login_attempts_total Login attempts grouped by result
+# TYPE login_attempts_total counter
+login_attempts_total{result="success"} 10
+login_attempts_total{result="failure"} 3
+# HELP login_bruteforce_blocked_total Blocked brute force logins
+# TYPE login_bruteforce_blocked_total counter
+login_bruteforce_blocked_total 1
+# HELP quota_checks_total Quota check results
+quota_checks_total{status="ok"} 7
+quota_checks_total{status="exceeded"} 1
 ...
 ```
 
@@ -205,9 +230,9 @@ login_bruteforce_blocked 1
 
 ---
 ## 8. 快速检查清单
-- [ ] `/metrics` 返回 200 且含 `login_total`。
+- [ ] `/metrics` 返回 200 且含 `login_attempts_total`。
 - [ ] 连续失败达到阈值后阻断响应出现。
-- [ ] `login_bruteforce_blocked` 数值 > 0。
+- [ ] `login_bruteforce_blocked_total` 数值 > 0。
 - [ ] 配置修改后重启生效（确认阈值变动）。
 - [ ] 上游调用产生 `upstream_latency_seconds_bucket`。
 - [ ] 无多余编译警告。
