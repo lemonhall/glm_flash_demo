@@ -5,8 +5,106 @@ use axum::{
 };
 use serde_json::json;
 
+// ============================================================================
+// 分层错误定义
+// ============================================================================
+
+/// 认证/授权相关错误
+#[derive(Debug, thiserror::Error)]
+pub enum AuthError {
+    #[error("认证失败: {0}")]
+    Unauthorized(String),
+    
+    #[error("Token 已过期")]
+    TokenExpired,
+    
+    #[error("Token 无效")]
+    InvalidToken,
+    
+    #[error("用户不存在")]
+    UserNotFound,
+    
+    #[error("账户已被停用")]
+    AccountDisabled,
+    
+    #[error("密码错误")]
+    InvalidCredentials,
+}
+
+/// 配额相关错误
+#[derive(Debug, thiserror::Error)]
+pub enum QuotaError {
+    #[error("配额已耗尽")]
+    Exceeded {
+        used: u32,
+        limit: u32,
+        reset_at: String,
+    },
+    
+    #[error("配额文件读取失败: {0}")]
+    FileReadError(String),
+    
+    #[error("配额文件写入失败: {0}")]
+    FileWriteError(String),
+    
+    #[error("配额层级无效: {0}")]
+    InvalidTier(String),
+}
+
+/// 上游服务（DeepSeek API）相关错误
+#[derive(Debug, thiserror::Error)]
+pub enum UpstreamError {
+    #[error("上游服务超时")]
+    Timeout,
+    
+    #[error("上游服务返回错误 (状态码 {status}): {message}")]
+    ApiError {
+        status: u16,
+        message: String,
+    },
+    
+    #[error("上游服务网络错误: {0}")]
+    NetworkError(String),
+    
+    #[error("上游服务响应格式错误: {0}")]
+    InvalidResponse(String),
+}
+
+/// 系统/内部错误
+#[derive(Debug, thiserror::Error)]
+pub enum SystemError {
+    #[error("内部错误: {0}")]
+    Internal(String),
+    
+    #[error("配置错误: {0}")]
+    Configuration(String),
+    
+    #[error("文件 IO 错误: {0}")]
+    FileIo(String),
+    
+    #[error("JSON 序列化错误: {0}")]
+    Serialization(String),
+    
+    #[error("数据库错误: {0}")]
+    Database(String),
+}
+
+/// 统一的应用错误枚举（向后兼容）
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("认证错误: {0}")]
+    Auth(#[from] AuthError),
+    
+    #[error("配额错误: {0}")]
+    Quota(#[from] QuotaError),
+    
+    #[error("上游服务错误: {0}")]
+    Upstream(#[from] UpstreamError),
+    
+    #[error("系统错误: {0}")]
+    System(#[from] SystemError),
+    
+    // 保留常用的快捷变体以保持向后兼容
     #[error("认证失败: {0}")]
     Unauthorized(String),
 
@@ -42,6 +140,67 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
+            // 分层错误处理
+            AppError::Auth(auth_err) => match auth_err {
+                AuthError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg),
+                AuthError::TokenExpired => (StatusCode::UNAUTHORIZED, "token_expired", "Token 已过期，请重新登录".to_string()),
+                AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "invalid_token", "Token 无效".to_string()),
+                AuthError::UserNotFound => (StatusCode::UNAUTHORIZED, "user_not_found", "用户不存在".to_string()),
+                AuthError::AccountDisabled => (StatusCode::FORBIDDEN, "account_disabled", "账户已被停用".to_string()),
+                AuthError::InvalidCredentials => (StatusCode::UNAUTHORIZED, "invalid_credentials", "用户名或密码错误".to_string()),
+            },
+            
+            AppError::Quota(quota_err) => match quota_err {
+                QuotaError::Exceeded { used, limit, reset_at } => {
+                    let body = Json(json!({
+                        "error": "quota_exceeded",
+                        "message": "月度配额已耗尽，请升级套餐或等待下月重置",
+                        "details": {
+                            "used": used,
+                            "limit": limit,
+                            "reset_at": reset_at
+                        },
+                        "upgrade_url": "https://your-site.com/upgrade"
+                    }));
+                    return (StatusCode::PAYMENT_REQUIRED, body).into_response();
+                },
+                QuotaError::FileReadError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "quota_file_read_error", msg),
+                QuotaError::FileWriteError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "quota_file_write_error", msg),
+                QuotaError::InvalidTier(msg) => (StatusCode::BAD_REQUEST, "invalid_quota_tier", msg),
+            },
+            
+            AppError::Upstream(upstream_err) => match upstream_err {
+                UpstreamError::Timeout => (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "upstream_timeout",
+                    "上游服务响应超时，请等待 5-10 秒后重试".to_string(),
+                ),
+                UpstreamError::ApiError { status, message } => (
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_api_error",
+                    format!("上游服务返回错误 (状态码 {}): {}", status, message),
+                ),
+                UpstreamError::NetworkError(msg) => (
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_network_error",
+                    format!("上游服务网络错误: {}", msg),
+                ),
+                UpstreamError::InvalidResponse(msg) => (
+                    StatusCode::BAD_GATEWAY,
+                    "upstream_invalid_response",
+                    format!("上游服务响应格式错误: {}", msg),
+                ),
+            },
+            
+            AppError::System(system_err) => match system_err {
+                SystemError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error", msg),
+                SystemError::Configuration(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "configuration_error", msg),
+                SystemError::FileIo(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "file_io_error", msg),
+                SystemError::Serialization(msg) => (StatusCode::BAD_REQUEST, "serialization_error", msg),
+                SystemError::Database(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "database_error", msg),
+            },
+            
+            // 向后兼容的快捷变体
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "unauthorized", msg),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", msg),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found", msg),
@@ -61,17 +220,17 @@ impl IntoResponse for AppError {
             AppError::QueueTimeout => (
                 StatusCode::REQUEST_TIMEOUT,
                 "queue_timeout",
-                "请求排队超时,请等待 2-3 秒后重试".to_string(),
+                "请求排队超时，请等待 2-3 秒后重试".to_string(),
             ),
             AppError::TooManyRequests => (
                 StatusCode::TOO_MANY_REQUESTS,
-                "queue_full",
-                "服务繁忙,请等待 3-5 秒后重试".to_string(),
+                "too_many_requests",
+                "服务繁忙，请等待 3-5 秒后重试".to_string(),
             ),
             AppError::GatewayTimeout => (
                 StatusCode::GATEWAY_TIMEOUT,
-                "glm_timeout",
-                "GLM 服务响应超时,请等待 5-10 秒后重试".to_string(),
+                "gateway_timeout",
+                "上游服务响应超时，请等待 5-10 秒后重试".to_string(),
             ),
             AppError::GlmError(msg) => (StatusCode::BAD_GATEWAY, "glm_error", msg),
             AppError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error", msg),
@@ -88,19 +247,19 @@ impl IntoResponse for AppError {
     }
 }
 
-// 兼容 anyhow::Error
-// 注意：anyhow::Error 会被转换为 InternalError
-// 建议在业务代码中尽量使用具体的 AppError 变体以便更好地分类错误
+// ============================================================================
+// 错误转换实现
+// ============================================================================
+
+// 兼容 anyhow::Error - 转换为 SystemError
 impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
-        // 记录详细的错误链，便于调试
         tracing::error!(
             error = %err,
             backtrace = ?err.backtrace(),
-            "anyhow::Error 被转换为 InternalError"
+            "anyhow::Error 被转换为 SystemError"
         );
         
-        // 将完整的错误链转换为字符串
         let error_chain = err
             .chain()
             .enumerate()
@@ -108,14 +267,14 @@ impl From<anyhow::Error> for AppError {
             .collect::<Vec<_>>()
             .join("\n");
         
-        AppError::InternalError(format!(
+        AppError::System(SystemError::Internal(format!(
             "内部错误:\n{}",
             error_chain
-        ))
+        )))
     }
 }
 
-// 为常见的标准库错误提供更具体的转换
+// 标准库 IO 错误转换
 impl From<std::io::Error> for AppError {
     fn from(err: std::io::Error) -> Self {
         tracing::error!(
@@ -129,19 +288,19 @@ impl From<std::io::Error> for AppError {
                 AppError::NotFound(format!("文件或资源不存在: {}", err))
             }
             std::io::ErrorKind::PermissionDenied => {
-                AppError::InternalError(format!("权限不足: {}", err))
+                AppError::System(SystemError::FileIo(format!("权限不足: {}", err)))
             }
             std::io::ErrorKind::TimedOut => {
                 AppError::GatewayTimeout
             }
             _ => {
-                AppError::InternalError(format!("IO 错误: {}", err))
+                AppError::System(SystemError::FileIo(format!("IO 错误: {}", err)))
             }
         }
     }
 }
 
-// 为 serde 错误提供更具体的转换
+// JSON 序列化错误转换
 impl From<serde_json::Error> for AppError {
     fn from(err: serde_json::Error) -> Self {
         tracing::warn!(
@@ -151,16 +310,60 @@ impl From<serde_json::Error> for AppError {
             "JSON 序列化/反序列化错误"
         );
         
-        AppError::BadRequest(format!(
+        AppError::System(SystemError::Serialization(format!(
             "JSON 格式错误 (行 {}, 列 {}): {}",
             err.line(),
             err.column(),
             err
-        ))
+        )))
     }
 }
 
+// ============================================================================
+// 便捷构造方法
+// ============================================================================
+
 impl AppError {
+    /// 创建认证错误 - 用户不存在
+    pub fn user_not_found() -> Self {
+        AppError::Auth(AuthError::UserNotFound)
+    }
+    
+    /// 创建认证错误 - 账户已停用
+    pub fn account_disabled() -> Self {
+        AppError::Auth(AuthError::AccountDisabled)
+    }
+    
+    /// 创建认证错误 - 凭据无效
+    pub fn invalid_credentials() -> Self {
+        AppError::Auth(AuthError::InvalidCredentials)
+    }
+    
+    /// 创建认证错误 - Token 过期
+    pub fn token_expired() -> Self {
+        AppError::Auth(AuthError::TokenExpired)
+    }
+    
+    /// 创建配额错误 - 配额已耗尽
+    pub fn quota_exceeded(used: u32, limit: u32, reset_at: String) -> Self {
+        AppError::Quota(QuotaError::Exceeded { used, limit, reset_at })
+    }
+    
+    /// 创建上游错误 - API 错误
+    pub fn upstream_api_error(status: u16, message: String) -> Self {
+        AppError::Upstream(UpstreamError::ApiError { status, message })
+    }
+    
+    /// 创建上游错误 - 超时
+    pub fn upstream_timeout() -> Self {
+        AppError::Upstream(UpstreamError::Timeout)
+    }
+    
+    /// 创建系统错误 - 配置错误
+    pub fn configuration_error(msg: impl Into<String>) -> Self {
+        AppError::System(SystemError::Configuration(msg.into()))
+    }
+    
     /// 创建带上下文的内部错误
     /// 
     /// 使用示例：
@@ -173,7 +376,7 @@ impl AppError {
             error = %err,
             "内部错误发生"
         );
-        AppError::InternalError(format!("{}: {}", context, err))
+        AppError::System(SystemError::Internal(format!("{}: {}", context, err)))
     }
     
     /// 创建带错误码的内部错误（便于运维查询日志）
@@ -188,7 +391,7 @@ impl AppError {
             message = message,
             "内部错误发生"
         );
-        AppError::InternalError(format!("[{}] {}", code, message))
+        AppError::System(SystemError::Internal(format!("[{}] {}", code, message)))
     }
     
     /// 从 anyhow::Error 创建带上下文的错误
@@ -212,11 +415,10 @@ impl AppError {
             .collect::<Vec<_>>()
             .join("\n");
         
-        AppError::InternalError(format!(
+        AppError::System(SystemError::Internal(format!(
             "{}:\n{}",
             context,
             error_chain
-        ))
+        )))
     }
 }
-
