@@ -9,6 +9,8 @@ pub struct Config {
     pub rate_limit: RateLimitConfig,
     #[serde(default)]
     pub quota: QuotaConfig,
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,6 +94,29 @@ fn default_http2_adaptive_window() -> bool { true }
 pub struct RateLimitConfig {
     pub requests_per_second: usize,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecurityConfig {
+    #[serde(default = "default_login_fail_window_seconds")]
+    pub login_fail_window_seconds: u64,
+    #[serde(default = "default_login_fail_threshold")]
+    pub login_fail_threshold: usize,
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            login_fail_window_seconds: 60,
+            login_fail_threshold: 5,
+            webhook_url: None,
+        }
+    }
+}
+
+fn default_login_fail_window_seconds() -> u64 { 60 }
+fn default_login_fail_threshold() -> usize { 5 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct QuotaConfig {

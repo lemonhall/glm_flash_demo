@@ -50,6 +50,7 @@ impl DeepSeekClient {
         request: ChatRequest,
     ) -> Result<impl Stream<Item = Result<Bytes, reqwest::Error>>, AppError> {
         let url = format!("{}/chat/completions", self.base_url);
+        let timer = crate::metrics::UpstreamTimer::start();
 
         let response = self
             .client
@@ -59,7 +60,10 @@ impl DeepSeekClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| AppError::GlmError(format!("请求 DeepSeek API 失败: {}", e)))?;
+            .map_err(|e| {
+                crate::metrics::METRICS.upstream_errors.with_label_values(&["network"]).inc();
+                AppError::GlmError(format!("请求 DeepSeek API 失败: {}", e))
+            })?;
 
         // 检查响应状态
         if !response.status().is_success() {
@@ -68,12 +72,14 @@ impl DeepSeekClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
+            crate::metrics::METRICS.upstream_errors.with_label_values(&["api"]).inc();
             return Err(AppError::GlmError(format!(
                 "DeepSeek API 返回错误 {}: {}",
                 status, error_text
             )));
         }
 
+        timer.observe();
         Ok(response.bytes_stream())
     }
 }

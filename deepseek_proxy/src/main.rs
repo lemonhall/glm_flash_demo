@@ -8,6 +8,7 @@ mod proxy;
 mod quota;
 mod user_activity;
 mod utils;
+mod metrics;
 
 use auth::{login, auth_middleware, JwtService};
 use axum::{
@@ -20,6 +21,7 @@ use deepseek::DeepSeekClient;
 use proxy::{proxy_chat, LoginLimiter, GlobalRateLimiter};
 use quota::QuotaManager;
 use user_activity::UserActivityLogger;
+use auth::bruteforce::BruteForceGuard;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
@@ -35,6 +37,7 @@ pub struct AppState {
     pub user_manager: Arc<auth::UserManager>, // 用户管理器（内存+持久化）
     pub global_rate_limiter: Arc<GlobalRateLimiter>, // 全局速率限制器
     pub activity_logger: Arc<UserActivityLogger>, // 用户行为日志记录器
+    pub brute_force_guard: Arc<BruteForceGuard>, // 登录失败检测
 }
 
 #[tokio::main]
@@ -119,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
     // 初始化用户行为日志记录器
     let activity_logger = Arc::new(UserActivityLogger::new("logs/users"));
     tracing::info!("用户行为日志: logs/users/");
+    let brute_force_guard = Arc::new(BruteForceGuard::new(config.security.clone()));
 
     let config = Arc::new(config);
 
@@ -132,12 +136,27 @@ async fn main() -> anyhow::Result<()> {
         user_manager,
         global_rate_limiter,
         activity_logger,
+        brute_force_guard,
     };
 
     // 构建路由
     // 公开路由（无需认证）
     let public_routes = Router::new()
-        .route("/auth/login", post(login));
+        .route("/auth/login", post(login))
+        .route("/metrics", axum::routing::get(|| async {
+            use axum::{response::IntoResponse, http::StatusCode};
+            match metrics::METRICS.render() {
+                Ok(body) => (
+                    StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+                    body
+                ).into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("metrics render error: {}", e)
+                ).into_response(),
+            }
+        }));
 
     // 受保护路由（需要 Token）
     let protected_routes = Router::new()

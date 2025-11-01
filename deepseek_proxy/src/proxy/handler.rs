@@ -28,6 +28,7 @@ pub async fn proxy_chat(
     // 0. 全局速率限制检查（最优先，防止 DoS）
     if let Err(wait_time) = state.global_rate_limiter.acquire().await {
         tracing::warn!("全局速率限制：拒绝请求，建议等待 {:.2} 秒", wait_time);
+        crate::metrics::METRICS.rate_limit_rejections.inc();
         return Err(AppError::TooManyRequests);
     }
 
@@ -41,6 +42,7 @@ pub async fn proxy_chat(
             tracing::warn!("用户 {} 配额已耗尽: {}/{}", claims.sub, used, limit);
             // 记录配额耗尽
             state.activity_logger.log_quota_exceeded(&claims.sub, used, limit).await;
+            crate::metrics::METRICS.quota_status.with_label_values(&["exceeded"]).inc();
             return Err(AppError::PaymentRequired {
                 used,
                 limit,
@@ -51,6 +53,7 @@ pub async fn proxy_chat(
             tracing::debug!("用户 {} 配额检查通过: {}次已用, {}次剩余", claims.sub, used, remaining);
             // 记录配额检查
             state.activity_logger.log_quota_check(&claims.sub, used, remaining).await;
+            crate::metrics::METRICS.quota_status.with_label_values(&["ok"]).inc();
         }
     }
 
@@ -73,6 +76,7 @@ pub async fn proxy_chat(
     // 记录聊天请求成功
     state.activity_logger.log_chat_request(&claims.sub, &model, message_count, None).await;
     tracing::info!("用户 {} 发起聊天请求: 模型={}, 消息数={}", claims.sub, model, message_count);
+    crate::metrics::METRICS.chat_requests.with_label_values(&["success"]).inc();
 
     // 6. 用 PermitGuardedStream 包装流，确保 permit 在整个流的生命周期内被持有
     let guarded_stream = crate::proxy::PermitGuardedStream::new(byte_stream, permit);
