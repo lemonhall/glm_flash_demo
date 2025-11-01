@@ -39,6 +39,8 @@ pub async fn proxy_chat(
     match quota_status {
         QuotaStatus::Exceeded { used, limit, reset_at } => {
             tracing::warn!("用户 {} 配额已耗尽: {}/{}", claims.sub, used, limit);
+            // 记录配额耗尽
+            state.activity_logger.log_quota_exceeded(&claims.sub, used, limit).await;
             return Err(AppError::PaymentRequired {
                 used,
                 limit,
@@ -47,6 +49,8 @@ pub async fn proxy_chat(
         }
         QuotaStatus::Ok { used, remaining, .. } => {
             tracing::debug!("用户 {} 配额检查通过: {}次已用, {}次剩余", claims.sub, used, remaining);
+            // 记录配额检查
+            state.activity_logger.log_quota_check(&claims.sub, used, remaining).await;
         }
     }
 
@@ -56,11 +60,19 @@ pub async fn proxy_chat(
     // 3. 强制设置为流式
     request.stream = true;
 
+    // 记录聊天请求（获取模型和消息数量）
+    let model = request.model.clone();
+    let message_count = request.messages.len();
+    
     // 4. 转发到 DeepSeek API
     let byte_stream = state.deepseek_client.chat_stream(request).await?;
 
     // 5. 上游请求成功，现在扣费
     state.quota_manager.increment_quota(&claims.sub).await?;
+
+    // 记录聊天请求成功
+    state.activity_logger.log_chat_request(&claims.sub, &model, message_count, None).await;
+    tracing::info!("用户 {} 发起聊天请求: 模型={}, 消息数={}", claims.sub, model, message_count);
 
     // 6. 用 PermitGuardedStream 包装流，确保 permit 在整个流的生命周期内被持有
     let guarded_stream = crate::proxy::PermitGuardedStream::new(byte_stream, permit);

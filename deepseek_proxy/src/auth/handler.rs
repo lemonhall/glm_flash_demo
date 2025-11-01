@@ -47,6 +47,10 @@ pub async fn login(
         })
         .await?;
 
+    // 记录登录行为
+    state.activity_logger.log_login(&user.username, None).await;
+    tracing::info!("用户 {} 登录成功", user.username);
+
     Ok(Json(LoginResponse {
         token,
         expires_in: state.jwt_service.get_ttl_seconds(),  // 返回实际的 TTL（已被限制为最多 60 秒）

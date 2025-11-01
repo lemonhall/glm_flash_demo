@@ -6,6 +6,7 @@ mod deepseek;
 mod logger;
 mod proxy;
 mod quota;
+mod user_activity;
 mod utils;
 
 use auth::{login, auth_middleware, JwtService};
@@ -18,6 +19,7 @@ use config::Config;
 use deepseek::DeepSeekClient;
 use proxy::{proxy_chat, LoginLimiter, GlobalRateLimiter};
 use quota::QuotaManager;
+use user_activity::UserActivityLogger;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
@@ -32,6 +34,7 @@ pub struct AppState {
     pub quota_manager: Arc<QuotaManager>,
     pub user_manager: Arc<auth::UserManager>, // 用户管理器（内存+持久化）
     pub global_rate_limiter: Arc<GlobalRateLimiter>, // 全局速率限制器
+    pub activity_logger: Arc<UserActivityLogger>, // 用户行为日志记录器
 }
 
 #[tokio::main]
@@ -113,6 +116,10 @@ async fn main() -> anyhow::Result<()> {
     let global_rate_limiter = Arc::new(GlobalRateLimiter::new(config.rate_limit.requests_per_second));
     tracing::info!("全局速率限制: {}", global_rate_limiter.info());
 
+    // 初始化用户行为日志记录器
+    let activity_logger = Arc::new(UserActivityLogger::new("logs/users"));
+    tracing::info!("用户行为日志: logs/users/");
+
     let config = Arc::new(config);
 
     // 创建统一的应用状态
@@ -124,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
         quota_manager: quota_manager.clone(),
         user_manager,
         global_rate_limiter,
+        activity_logger,
     };
 
     // 构建路由

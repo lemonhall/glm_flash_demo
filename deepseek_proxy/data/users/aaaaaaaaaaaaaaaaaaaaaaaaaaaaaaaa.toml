@@ -1,0 +1,6 @@
+username = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+password = "test123"
+quota_tier = "basic"
+is_active = false
+created_at = "2025-11-01T13:18:00.925666100+08:00"
+updated_at = "2025-11-01T13:18:01.708246300+08:00"
