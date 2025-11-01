@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use std::collections::HashMap;
+use tokio::task::JoinHandle;
 
 /// 用户行为类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,9 +65,14 @@ pub struct UserActivityLog {
 /// 用户行为日志记录器
 #[derive(Clone)]
 pub struct UserActivityLogger {
+    #[allow(dead_code)]
     base_dir: PathBuf,
+    #[allow(dead_code)]
     max_file_size: u64,
-    file_handles: Arc<Mutex<HashMap<String, (tokio::fs::File, u64)>>>, // username -> (file, current_size)
+    #[allow(dead_code)]
+    file_handles: Arc<Mutex<HashMap<String, (tokio::fs::File, u64)>>>, // log_key -> (file, current_size)
+    tx: mpsc::Sender<UserActivityLog>,            // 异步发送日志
+    _bg_handle: Arc<JoinHandle<()>>,              // 后台写任务，保持生命周期
 }
 
 impl UserActivityLogger {
@@ -77,27 +83,72 @@ impl UserActivityLogger {
     /// - 按日期自动滚动：{username}.2025-11-01.log
     /// - 按大小自动滚动：单个文件最大 5MB
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+        let base_dir = base_dir.into();
+        let max_file_size = 5 * 1024 * 1024; // 5MB 默认
+        let (tx, mut rx) = mpsc::channel::<UserActivityLog>(10_000); // 足够大的缓冲，避免高峰阻塞
+        let file_handles = Arc::new(Mutex::new(HashMap::new()));
+        let base_dir_clone = base_dir.clone();
+        let fh_clone = file_handles.clone();
+        let max_size_clone = max_file_size;
+        // 后台批量写任务
+        let handle = tokio::spawn(async move {
+            use tokio::time::{interval, Duration};
+            let mut flush_tick = interval(Duration::from_millis(500)); // 500ms 尝试刷新一次
+            // 缓冲队列
+            let mut pending: Vec<UserActivityLog> = Vec::with_capacity(1024);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = flush_tick.tick() => {
+                        if !pending.is_empty() {
+                            if let Err(e) = write_batch(&base_dir_clone, max_size_clone, &fh_clone, &mut pending).await {
+                                tracing::error!(error = %e, "批量写入用户行为日志失败");
+                            }
+                        }
+                    }
+                    msg = rx.recv() => {
+                        match msg {
+                            Some(log) => {
+                                pending.push(log);
+                                // 达到批量阈值立即写
+                                if pending.len() >= 1024 { // 批量大小阈值
+                                    if let Err(e) = write_batch(&base_dir_clone, max_size_clone, &fh_clone, &mut pending).await {
+                                        tracing::error!(error = %e, "批量写入用户行为日志失败");
+                                    }
+                                }
+                            }
+                            None => {
+                                // 通道关闭，尝试写出剩余日志后退出
+                                if !pending.is_empty() {
+                                    let _ = write_batch(&base_dir_clone, max_size_clone, &fh_clone, &mut pending).await;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
         Self {
-            base_dir: base_dir.into(),
-            max_file_size: 5 * 1024 * 1024, // 5 MB
-            file_handles: Arc::new(Mutex::new(HashMap::new())),
+            base_dir,
+            max_file_size,
+            file_handles,
+            tx,
+            _bg_handle: Arc::new(handle),
         }
     }
 
-    /// 记录用户行为
+    /// 记录用户行为（异步投递，不做磁盘 IO）
     pub async fn log(&self, log: UserActivityLog) {
-        if let Err(e) = self.write_log(&log).await {
-            tracing::error!(
-                username = %log.username,
-                action = ?log.action,
-                error = %e,
-                "写入用户行为日志失败"
-            );
+        if let Err(e) = self.tx.send(log).await {
+            tracing::error!(error = %e, "发送用户行为日志到缓冲通道失败");
         }
     }
 
-    /// 写入日志到文件
-    async fn write_log(&self, log: &UserActivityLog) -> anyhow::Result<()> {
+    /// 旧的直接写方法保留为内部工具（可用于测试或紧急 flush）
+    #[allow(dead_code)]
+    async fn write_log_direct(&self, log: &UserActivityLog) -> anyhow::Result<()> {
         let username = sanitize_username(&log.username);
         
         // 用户日志目录：logs/users/{username}/
@@ -151,19 +202,22 @@ impl UserActivityLogger {
             }
         }
 
-        // 追加写入文件
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file_path)
-            .await?;
+        // 打开或复用文件句柄
+    let (need_open, file) = if let Some((fh, _size)) = handles.get_mut(&cache_key) {
+            (false, fh)
+        } else {
+            // 新文件 open
+            let f = OpenOptions::new().create(true).append(true).open(&log_file_path).await?;
+            handles.insert(cache_key.clone(), (f, 0));
+            let (fh, _sz) = handles.get_mut(&cache_key).expect("file handle just inserted");
+            (true, fh)
+        };
 
         file.write_all(json_line.as_bytes()).await?;
-        file.flush().await?;
-
-        // 更新缓存
-        handles.insert(cache_key, (file, line_size));
-
+        // 不每次 flush，依赖 OS/批量 flush；若是新建文件可立即 flush 一次
+        if need_open { file.flush().await?; }
+        // 更新计数
+        if let Some((_, sz)) = handles.get_mut(&cache_key) { *sz += line_size; }
         Ok(())
     }
 
@@ -259,6 +313,61 @@ impl UserActivityLogger {
     }
 }
 
+/// 批量写入：对 pending 中的日志按照 log_key 分组写入，提高 IO 效率
+async fn write_batch(base_dir: &PathBuf, max_file_size: u64, file_handles: &Arc<Mutex<HashMap<String, (tokio::fs::File, u64)>>>, pending: &mut Vec<UserActivityLog>) -> anyhow::Result<()> {
+    if pending.is_empty() { return Ok(()); }
+    // 交换出批次，避免长期持锁
+    let mut current = Vec::new();
+    std::mem::swap(&mut current, pending);
+
+    // 按用户+日期分组
+    let mut groups: HashMap<String, Vec<UserActivityLog>> = HashMap::new();
+    for log in current { groups.entry(log.username.clone()).or_default().push(log); }
+
+    let mut handles = file_handles.lock().await;
+    for (username_raw, logs) in groups {
+        let username = sanitize_username(&username_raw);
+        let user_log_dir = base_dir.join(&username);
+        tokio::fs::create_dir_all(&user_log_dir).await?;
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let log_filename = format!("{}.{}.log", username, today);
+        let log_file_path = user_log_dir.join(&log_filename);
+        let cache_key = format!("{}:{}", username, today);
+
+        // 滚动检查：只在句柄缺失或大小超限时处理
+        let mut need_open = false;
+    let rotate_needed = if let Ok(metadata) = tokio::fs::metadata(&log_file_path).await { metadata.len() >= max_file_size } else { false };
+        if rotate_needed {
+            let timestamp = chrono::Local::now().format("%H%M%S").to_string();
+            let archived_name = format!("{}.{}.{}.log", username, today, timestamp);
+            let archived_path = user_log_dir.join(&archived_name);
+            if let Err(e) = tokio::fs::rename(&log_file_path, &archived_path).await { tracing::warn!(error=%e, "日志文件重命名失败"); } else { tracing::info!("用户日志文件滚动: {} -> {}", log_file_path.display(), archived_path.display()); }
+            handles.remove(&cache_key);
+            // 异步清理旧文件
+            let user_log_dir_clone = user_log_dir.clone();
+            let username_clone = username.clone();
+            tokio::spawn(async move { let _ = cleanup_old_logs(&user_log_dir_clone, &username_clone).await; });
+        }
+
+        // 获取或创建文件句柄
+        let (file, sz_ptr) = if let Some((f, sz)) = handles.get_mut(&cache_key) { (f, sz) } else {
+            need_open = true;
+            let f = OpenOptions::new().create(true).append(true).open(&log_file_path).await?;
+            handles.insert(cache_key.clone(), (f, 0));
+            let (f2, sz2) = handles.get_mut(&cache_key).unwrap();
+            (f2, sz2)
+        };
+
+        // 写入本组所有日志
+        let mut buf = String::with_capacity(logs.len() * 128);
+        for log in logs { let mut line = serde_json::to_string(&log)?; line.push('\n'); buf.push_str(&line); }
+        file.write_all(buf.as_bytes()).await?;
+        if need_open { file.flush().await?; } // 新文件首写立即 flush
+        *sz_ptr += buf.len() as u64;
+    }
+    Ok(())
+}
+
 /// 清理用户名中的非法字符，防止路径穿越
 fn sanitize_username(username: &str) -> String {
     username
@@ -313,6 +422,7 @@ async fn cleanup_old_logs(user_log_dir: &PathBuf, username: &str) -> anyhow::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::time::{sleep, Duration};
 
     #[test]
     fn test_sanitize_username() {
@@ -330,6 +440,9 @@ mod tests {
 
         let logger = UserActivityLogger::new(&temp_dir);
         logger.log_login("test_user", Some("127.0.0.1".to_string())).await;
+
+    // 等待后台异步批量写任务 flush
+    sleep(Duration::from_millis(700)).await;
 
         // 检查用户目录是否创建
         let user_dir = temp_dir.join("test_user");
