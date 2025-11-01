@@ -1,6 +1,0 @@
-username = "test_newuser"
-password = "newpass123"
-quota_tier = "basic"
-is_active = false
-created_at = "2025-10-31T00:10:22.926201800+08:00"
-updated_at = "2025-10-31T00:10:29.329354300+08:00"
