@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod error;
 mod deepseek;
+mod logger;
 mod proxy;
 mod quota;
 mod utils;
@@ -20,7 +21,6 @@ use quota::QuotaManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // 统一的应用状态
 #[derive(Clone)]
@@ -36,19 +36,17 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 初始化日志（使用东八区时间）
-    let timer = tracing_subscriber::fmt::time::OffsetTime::new(
-        time::UtcOffset::from_hms(8, 0, 0).expect("Invalid UTC offset"),
-        time::format_description::well_known::Rfc3339,
-    );
-
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "deepseek_proxy=debug,tower_http=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer().with_timer(timer))
-        .init();
+    // 初始化日志系统（自动滚动，最大 10MB/文件，保留 5 个文件）
+    logger::init_logger(logger::LoggerConfig {
+        log_dir: "logs".to_string(),
+        file_prefix: "deepseek_proxy".to_string(),
+        max_file_size: 10 * 1024 * 1024, // 10 MB
+        max_files: 5,
+    })?;
+    
+    tracing::info!("========================================");
+    tracing::info!("DeepSeek Proxy 服务启动");
+    tracing::info!("========================================");
 
     // 加载配置
     let config = Config::load()?;
