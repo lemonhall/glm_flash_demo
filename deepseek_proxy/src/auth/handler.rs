@@ -18,6 +18,12 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
+    // 0. 全局速率限制检查（防止登录接口被暴力破解）
+    if let Err(wait_time) = state.global_rate_limiter.acquire().await {
+        tracing::warn!("全局速率限制：拒绝登录请求，建议等待 {:.2} 秒", wait_time);
+        return Err(AppError::TooManyRequests);
+    }
+
     // 验证用户名密码（从内存中的用户管理器获取）
     let user = state
         .user_manager

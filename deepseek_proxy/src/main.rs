@@ -15,7 +15,7 @@ use axum::{
 };
 use config::Config;
 use deepseek::DeepSeekClient;
-use proxy::{proxy_chat, LoginLimiter};
+use proxy::{proxy_chat, LoginLimiter, GlobalRateLimiter};
 use quota::QuotaManager;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,6 +31,7 @@ pub struct AppState {
     pub login_limiter: Arc<LoginLimiter>, // 现在统一管理Token生命周期和并发控制
     pub quota_manager: Arc<QuotaManager>,
     pub user_manager: Arc<auth::UserManager>, // 用户管理器（内存+持久化）
+    pub global_rate_limiter: Arc<GlobalRateLimiter>, // 全局速率限制器
 }
 
 #[tokio::main]
@@ -110,6 +111,10 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("配额: 每 {} 次请求写一次磁盘", config.quota.save_interval);
 
+    // 初始化全局速率限制器
+    let global_rate_limiter = Arc::new(GlobalRateLimiter::new(config.rate_limit.requests_per_second));
+    tracing::info!("全局速率限制: {}", global_rate_limiter.info());
+
     let config = Arc::new(config);
 
     // 创建统一的应用状态
@@ -120,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         login_limiter, // 统一管理Token生命周期和并发控制
         quota_manager: quota_manager.clone(),
         user_manager,
+        global_rate_limiter,
     };
 
     // 构建路由

@@ -25,6 +25,12 @@ pub async fn proxy_chat(
     Extension(claims): Extension<Claims>,
     Json(mut request): Json<ChatRequest>,
 ) -> Result<Response, AppError> {
+    // 0. 全局速率限制检查（最优先，防止 DoS）
+    if let Err(wait_time) = state.global_rate_limiter.acquire().await {
+        tracing::warn!("全局速率限制：拒绝请求，建议等待 {:.2} 秒", wait_time);
+        return Err(AppError::TooManyRequests);
+    }
+
     // 1. 检查配额（不扣费）
     let quota_status = state.quota_manager
         .check_quota(&claims.sub)

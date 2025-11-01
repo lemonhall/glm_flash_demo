@@ -28,9 +28,10 @@ premium = 1500
 pro = 1000
 
 [rate_limit]
-queue_capacity = 20
-queue_timeout_seconds = 5
-requests_per_second = 2
+# 全局速率限制配置（针对 1核1G 小型服务器）
+# 每秒允许的最大请求数
+requests_per_second = 5
+# 突发容量会自动设为 requests_per_second * 2
 
 [server]
 host = "0.0.0.0"

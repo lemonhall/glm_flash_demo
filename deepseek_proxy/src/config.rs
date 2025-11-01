@@ -91,8 +91,6 @@ fn default_http2_adaptive_window() -> bool { true }
 #[derive(Debug, Clone, Deserialize)]
 pub struct RateLimitConfig {
     pub requests_per_second: usize,
-    pub queue_capacity: usize,
-    pub queue_timeout_seconds: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
