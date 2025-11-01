@@ -155,10 +155,10 @@ impl UserManager {
     /// 校验用户名是否合法
     /// 
     /// 规则：
-    /// - 长度 3-32 字符
-    /// - 只允许字母、数字、下划线和连字符
-    /// - 必须以字母或数字开头
-    /// - 不能包含路径分隔符或特殊字符
+    /// - 长度 3-32 字节（ASCII字符）
+    /// - 只允许 ASCII 字母、数字、下划线和连字符
+    /// - 必须以 ASCII 字母或数字开头
+    /// - 不能包含路径分隔符、控制字符或非ASCII字符
     fn validate_username(username: &str) -> Result<(), AppError> {
         // 检查长度
         if username.len() < 3 || username.len() > 32 {
@@ -167,20 +167,27 @@ impl UserManager {
             ));
         }
 
-        // 检查是否以字母或数字开头
+        // 检查是否只包含 ASCII 字符
+        if !username.is_ascii() {
+            return Err(AppError::BadRequest(
+                "用户名只能包含 ASCII 字符（不支持中文、表情符号等）".to_string()
+            ));
+        }
+
+        // 检查是否以 ASCII 字母或数字开头
         if let Some(first_char) = username.chars().next() {
-            if !first_char.is_alphanumeric() {
+            if !first_char.is_ascii_alphanumeric() {
                 return Err(AppError::BadRequest(
                     "用户名必须以字母或数字开头".to_string()
                 ));
             }
         }
 
-        // 检查字符是否合法（只允许字母、数字、下划线、连字符）
+        // 检查字符是否合法（只允许 ASCII 字母、数字、下划线、连字符）
         for ch in username.chars() {
-            if !ch.is_alphanumeric() && ch != '_' && ch != '-' {
+            if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' {
                 return Err(AppError::BadRequest(
-                    format!("用户名包含非法字符: '{}'. 只允许字母、数字、下划线和连字符", ch)
+                    format!("用户名包含非法字符: '{}'. 只允许英文字母、数字、下划线和连字符", ch)
                 ));
             }
         }
